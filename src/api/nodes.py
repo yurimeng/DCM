@@ -1,0 +1,337 @@
+"""
+Nodes API - F2: 节点注册与状态管理
+来源: Function/F2
+"""
+
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy.orm import Session
+from typing import Optional, List
+
+from ..database import get_db
+from ..models import Node, NodeCreate, NodeResponse, NodeStatus, NodePollResponse, NodeResultSubmit
+from ..models.db_models import NodeDB, NodeStatusDB, StakeRecordDB, MatchDB
+from ..repositories import NodeRepository, MatchRepository
+from ..services import matching_service, escrow_service, verification_service, stake_service
+from config import settings
+
+router = APIRouter(prefix="/nodes", tags=["nodes"])
+
+
+def _safe_status(status) -> str:
+    """安全获取状态值"""
+    if hasattr(status, 'value'):
+        return status.value
+    return str(status)
+
+
+@router.post("", response_model=NodeResponse)
+async def register_node(
+    node_create: NodeCreate,
+    db: Session = Depends(get_db)
+):
+    """
+    注册新节点
+    
+    返回所需的 Stake 门槛
+    """
+    # 1. 创建 Node Pydantic 模型
+    node = Node(**node_create.model_dump())
+    
+    # 2. 保存到数据库
+    node_repo = NodeRepository(db)
+    db_node = node_repo.create(node)
+    
+    # 3. 注册到撮合引擎（内存）
+    matching_service.register_node(node)
+    
+    # 4. 响应
+    return NodeResponse(
+        node_id=node.node_id,
+        status=NodeStatus(_safe_status(db_node.status)),
+        stake_required=db_node.stake_required,
+        stake_amount=db_node.stake_amount,
+        next_step=f"Deposit {db_node.stake_required} USDC to activate",
+    )
+
+
+@router.get("/{node_id}")
+async def get_node(
+    node_id: str,
+    db: Session = Depends(get_db)
+):
+    """获取节点信息"""
+    node_repo = NodeRepository(db)
+    db_node = node_repo.get(node_id)
+    
+    if not db_node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    return {
+        "node_id": db_node.node_id,
+        "gpu_type": db_node.gpu_type,
+        "vram_gb": db_node.vram_gb,
+        "model_support": db_node.model_support,
+        "ask_price": db_node.ask_price,
+        "avg_latency": db_node.avg_latency,
+        "region": db_node.region,
+        "status": _safe_status(db_node.status),
+        "stake_amount": db_node.stake_amount,
+        "stake_required": db_node.stake_required,
+        "stake_tier": db_node.stake_tier,
+        "registered_at": db_node.registered_at.isoformat() if db_node.registered_at else None,
+        "last_heartbeat": db_node.last_heartbeat.isoformat() if db_node.last_heartbeat else None,
+    }
+
+
+@router.post("/{node_id}/online")
+async def node_online(
+    node_id: str,
+    db: Session = Depends(get_db)
+):
+    """节点上线"""
+    node_repo = NodeRepository(db)
+    db_node = node_repo.get(node_id)
+    
+    if not db_node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    # 检查 Stake 是否足够
+    stake_record = db.query(StakeRecordDB).filter(
+        StakeRecordDB.node_id == node_id
+    ).first()
+    
+    if not stake_record or stake_record.status != "active":
+        raise HTTPException(
+            status_code=400,
+            detail="Stake not deposited or frozen"
+        )
+    
+    # 更新数据库
+    node_repo.update(node_id, status=NodeStatus.ONLINE)
+    
+    # 更新内存服务
+    matching_service.update_node_status(node_id, NodeStatus.ONLINE)
+    
+    return {
+        "node_id": node_id,
+        "status": NodeStatus.ONLINE.value,
+        "message": "Node is now online and available for matching"
+    }
+
+
+@router.post("/{node_id}/offline")
+async def node_offline(
+    node_id: str,
+    db: Session = Depends(get_db)
+):
+    """节点下线"""
+    node_repo = NodeRepository(db)
+    node_repo.update(node_id, status=NodeStatus.OFFLINE)
+    
+    # 更新内存服务
+    matching_service.update_node_status(node_id, NodeStatus.OFFLINE)
+    matching_service.unregister_node(node_id)
+    
+    return {
+        "node_id": node_id,
+        "status": NodeStatus.OFFLINE.value,
+        "message": "Node is now offline"
+    }
+
+
+@router.post("/{node_id}/poll", response_model=NodePollResponse)
+async def poll_job(
+    node_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    节点拉取 Job
+    
+    主动触发撮合，为该节点匹配待处理的 Job
+    """
+    # 检查节点状态
+    node_repo = NodeRepository(db)
+    db_node = node_repo.get(node_id)
+    
+    if not db_node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    # 更新心跳
+    node_repo.update_heartbeat(node_id)
+    
+    # 检查节点是否在线
+    if db_node.status != NodeStatusDB.ONLINE:
+        return NodePollResponse(has_job=False)
+    
+    # 触发撮合（内存服务）
+    match = matching_service.poll_node(node_id)
+    
+    if match:
+        # 获取 Job 信息（简化）
+        return NodePollResponse(
+            has_job=True,
+            job={
+                "job_id": match.job_id,
+                "model": settings.mvp_model,
+                "input_tokens": 2048,  # TODO: 从 Job 获取
+                "output_tokens_limit": 1024,  # TODO: 从 Job 获取
+                "max_latency": 5000,  # TODO: 从 Job 获取
+                "locked_price": match.locked_price,
+            }
+        )
+    
+    return NodePollResponse(has_job=False)
+
+
+@router.post("/{node_id}/jobs/{job_id}/result")
+async def submit_result(
+    node_id: str,
+    job_id: str,
+    result_submit: NodeResultSubmit,
+    db: Session = Depends(get_db)
+):
+    """
+    节点提交执行结果
+    
+    触发验证流程
+    """
+    # 获取 Match
+    match = matching_service.get_match_by_job(job_id)
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    
+    # 检查是否是该节点
+    if match.node_id != node_id:
+        raise HTTPException(status_code=403, detail="Not your job")
+    
+    # TODO: 获取 Job 对象进行完整验证
+    
+    # Layer 1 验证
+    # verification_service.verify_layer1(...)
+    
+    # 10% 概率触发 Layer 2
+    layer2_triggered = verification_service.should_trigger_layer2()
+    
+    return {
+        "received": True,
+        "verification_triggered": True,
+        "layer": 1 if not layer2_triggered else 2,
+        "match_id": match.match_id,
+        "job_id": job_id,
+    }
+
+
+@router.post("/{node_id}/stake/deposit")
+async def deposit_stake(
+    node_id: str,
+    tx_hash: str,
+    db: Session = Depends(get_db)
+):
+    """
+    确认 Stake 存款
+    
+    tx_hash: 链上交易哈希
+    """
+    # 获取节点信息
+    node_repo = NodeRepository(db)
+    db_node = node_repo.get(node_id)
+    
+    if not db_node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    # 检查是否已有存款
+    existing = db.query(StakeRecordDB).filter(
+        StakeRecordDB.node_id == node_id
+    ).first()
+    
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="Stake already deposited"
+        )
+    
+    # 创建存款记录
+    stake_record = StakeRecordDB(
+        id=f"stake_{node_id}",
+        node_id=node_id,
+        amount=db_node.stake_required,
+        tx_hash=tx_hash,
+        status="active",
+    )
+    db.add(stake_record)
+    
+    # 更新节点 stake_amount
+    db_node.stake_amount = db_node.stake_required
+    
+    db.commit()
+    
+    return {
+        "node_id": node_id,
+        "stake_amount": stake_record.amount,
+        "status": stake_record.status,
+        "message": f"Stake of {stake_record.amount} USDC deposited successfully"
+    }
+
+
+@router.get("/{node_id}/status")
+async def get_node_status(
+    node_id: str,
+    db: Session = Depends(get_db)
+):
+    """获取节点状态和统计"""
+    node_repo = NodeRepository(db)
+    db_node = node_repo.get(node_id)
+    
+    if not db_node:
+        return {
+            "node_id": node_id,
+            "status": "not_registered",
+            "is_frozen": False,
+            "violations": 0,
+        }
+    
+    # 检查是否冻结
+    is_frozen = stake_service.is_node_frozen(node_id)
+    
+    # 获取违规次数
+    violations = verification_service.get_node_violations(node_id)
+    
+    # 获取匹配统计
+    match_count = db.query(MatchDB).filter(MatchDB.node_id == node_id).count()
+    
+    return {
+        "node_id": node_id,
+        "status": _safe_status(db_node.status),
+        "is_frozen": is_frozen,
+        "violations": violations,
+        "total_matches": match_count,
+        "stake_amount": db_node.stake_amount,
+        "stake_required": db_node.stake_required,
+    }
+
+
+@router.get("")
+async def list_nodes(
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db)
+):
+    """列出节点列表"""
+    nodes = db.query(NodeDB).offset(offset).limit(limit).all()
+    
+    return {
+        "items": [
+            {
+                "node_id": node.node_id,
+                "gpu_type": node.gpu_type,
+                "vram_gb": node.vram_gb,
+                "ask_price": node.ask_price,
+                "status": _safe_status(node.status),
+                "region": node.region,
+            }
+            for node in nodes
+        ],
+        "total": db.query(NodeDB).count(),
+        "limit": limit,
+        "offset": offset,
+    }
