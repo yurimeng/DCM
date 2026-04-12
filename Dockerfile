@@ -27,11 +27,11 @@ RUN mkdir -p /app/data && chmod 755 /app/data
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1
+ENV PORT=8888
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:10000/health || exit 1
+    CMD curl -f http://localhost:8888/health || exit 1
 
-# Run the application
-# Note: Render sets PORT env var, uvicorn uses PORT env var automatically
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0"]
+# Run the application on port 8888
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8888"]
