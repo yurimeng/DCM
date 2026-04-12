@@ -11,7 +11,7 @@ from datetime import datetime
 from ..database import get_db
 from ..models import Node, NodeCreate, NodeResponse, NodeStatus, NodePollResponse, NodeResultSubmit
 from ..models.db_models import NodeDB, NodeStatusDB, StakeRecordDB, MatchDB
-from ..repositories import NodeRepository, MatchRepository
+from ..repositories import NodeRepository, MatchRepository, JobRepository
 from ..services import matching_service, escrow_service, verification_service, stake_service
 from config import settings
 
@@ -230,21 +230,53 @@ async def submit_result(
     if match.node_id != node_id:
         raise HTTPException(status_code=403, detail="Not your job")
     
-    # TODO: 获取 Job 对象进行完整验证
+    # 获取 Job 对象
+    from ..models import Job
+    job_repo = JobRepository(db)
+    db_job = job_repo.get(job_id)
+    
+    job = Job(
+        model=db_job.model,
+        input_tokens=db_job.input_tokens,
+        output_tokens_limit=db_job.output_tokens_limit,
+        max_latency=db_job.max_latency,
+        bid_price=float(db_job.bid_price),
+    )
+    job.job_id = db_job.job_id
     
     # Layer 1 验证
-    # verification_service.verify_layer1(...)
+    layer1_passed, _ = verification_service.verify_layer1(
+        match=match,
+        job=job,
+        result=result_submit.result,
+        result_hash=result_submit.result_hash,
+        actual_latency_ms=result_submit.actual_latency_ms,
+        actual_output_tokens=result_submit.actual_output_tokens,
+    )
     
     # 10% 概率触发 Layer 2
     layer2_triggered = verification_service.should_trigger_layer2()
+    layer2_job_id = None
     
-    return {
+    if layer2_triggered and layer1_passed:
+        layer2_job_id = verification_service.trigger_layer2(
+            match_id=match.match_id,
+            job=job,
+            original_result=result_submit.result,
+        )
+    
+    response = {
         "received": True,
         "verification_triggered": True,
         "layer": 1 if not layer2_triggered else 2,
         "match_id": match.match_id,
         "job_id": job_id,
     }
+    
+    if layer2_job_id:
+        response["layer2_job_id"] = layer2_job_id
+    
+    return response
 
 
 @router.post("/{node_id}/stake/deposit")
