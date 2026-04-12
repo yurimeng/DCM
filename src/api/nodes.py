@@ -467,7 +467,7 @@ async def get_node_config(
     
     return {
         "node_id": db_node.node_id,
-        "model": "llama3-8b",  # MVP 固定
+        "model": db_node.model_support,  # 动态获取
         "ask_price": db_node.ask_price,
         "avg_latency": db_node.avg_latency,
         "heartbeat_interval": 30,

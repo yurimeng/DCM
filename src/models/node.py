@@ -29,7 +29,7 @@ class NodeCreate(BaseModel):
     """Node 创建请求"""
     gpu_type: str = Field(..., description="GPU 类型（如 RTX4090, A100）")
     vram_gb: int = Field(..., gt=0, description="VRAM 大小（GB）")
-    model_support: List[str] = Field(default=["llama3-8b"], description="支持的模型列表")
+    model_support: List[str] = Field(default=["qwen2.5:7b"], description="支持的模型列表")
     ask_price: float = Field(..., gt=0, description="报价（USDC/1M tokens）")
     avg_latency: int = Field(..., gt=0, description="历史平均延迟（ms）")
     region: str = Field(..., description="地理区域")
@@ -37,8 +37,11 @@ class NodeCreate(BaseModel):
     @field_validator("model_support")
     @classmethod
     def validate_model_support(cls, v: List[str]) -> List[str]:
-        if "llama3-8b" not in v:
-            raise ValueError("MVP 节点必须支持 llama3-8b 模型")
+        # 支持 qwen2.5:7b
+        allowed = ["qwen2.5:7b", "qwen3.5:latest", "gemma4:e4b", "llama3-8b"]
+        for m in v:
+            if m not in allowed:
+                raise ValueError(f"仅支持: {', '.join(allowed)}")
         return v
 
 

@@ -21,7 +21,7 @@ class JobStatus(str, Enum):
 
 class JobCreate(BaseModel):
     """Job 创建请求"""
-    model: str = Field(default="llama3-8b", description="模型名称（MVP 仅支持 llama3-8b）")
+    model: str = Field(default="qwen2.5:7b", description="模型名称")
     input_tokens: int = Field(..., gt=0, description="输入 token 数量")
     output_tokens_limit: int = Field(..., gt=0, le=4096, description="输出 token 上限")
     max_latency: int = Field(..., ge=1000, le=30000, description="最大延迟（ms）")
@@ -31,8 +31,10 @@ class JobCreate(BaseModel):
     @field_validator("model")
     @classmethod
     def validate_model(cls, v: str) -> str:
-        if v != "llama3-8b":
-            raise ValueError("MVP 仅支持 llama3-8b 模型")
+        # MVP 支持 qwen2.5:7b
+        allowed_models = ["qwen2.5:7b", "qwen3.5:latest", "gemma4:e4b", "llama3-8b"]
+        if v not in allowed_models:
+            raise ValueError(f"仅支持模型: {', '.join(allowed_models)}")
         return v
 
 

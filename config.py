@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     
     # ===== 模型限制（MVP）=====
-    mvp_model: str = "llama3-8b"
+    mvp_model: str = "qwen2.5:7b"
     max_output_tokens: int = 4096
     max_latency_ms: int = 30000
     min_latency_ms: int = 1000
