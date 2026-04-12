@@ -16,7 +16,4 @@ services:
         value: sqlite:///./data/dcm.db
       - key: DCM_MVP_MODE
         value: "true"
-    disk:
-      name: dcm-data
-      mountPath: /app/data
-      sizeGB: 1
+    # 注意: 免费版无持久化磁盘，数据重启后丢失（用于测试）
