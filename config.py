@@ -3,6 +3,7 @@ DCM - Decentralized Compute Market
 Configuration Settings
 """
 
+import os
 from pydantic_settings import BaseSettings
 from typing import List
 
@@ -72,3 +73,23 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+# === Sprint 5: 链上集成配置 ===
+
+# 区块链网络
+ETH_RPC_URL = os.getenv("ETH_RPC_URL", "https://rpc-mumbai.maticvigil.com")
+CHAIN_ID = int(os.getenv("CHAIN_ID", "80001"))  # Polygon Mumbai
+
+# 私钥 (测试用，切勿提交到 GitHub!)
+PRIVATE_KEY = os.getenv("PRIVATE_KEY", "")
+
+# 合约地址 (部署后填写)
+ESCROW_CONTRACT_ADDRESS = os.getenv("ESCROW_CONTRACT_ADDRESS", "")
+STAKE_CONTRACT_ADDRESS = os.getenv("STAKE_CONTRACT_ADDRESS", "")
+
+# USDC 地址 (Polygon Mumbai)
+USDC_ADDRESS = os.getenv("USDC_ADDRESS", "0xe6B8d5cf4c0f8C4d3E3F8E8C3F8E8C3E3F8E8C3E")
+
+# 链上模式开关
+USE_BLOCKCHAIN = os.getenv("USE_BLOCKCHAIN", "false").lower() == "true"
