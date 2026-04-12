@@ -96,3 +96,35 @@ pytest tests/
 ---
 
 *文档位置：Obsidian Vault `Decentralized Compute Market/`*
+
+---
+
+## Sprint 5: 链上集成
+
+### 合约
+
+- `contracts/Escrow.sol` - USDC 托管合约
+- `contracts/Stake.sol` - 节点质押合约
+
+### 部署
+
+```bash
+cd contracts
+npm install
+npx hardhat run scripts/deploy_contracts.js --network mumbai
+```
+
+### 配置
+
+设置环境变量:
+```bash
+ETH_RPC_URL=https://rpc-mumbai.maticvigil.com
+PRIVATE_KEY=your_key
+ESCROW_CONTRACT_ADDRESS=0x...
+STAKE_CONTRACT_ADDRESS=0x...
+USE_BLOCKCHAIN=true
+```
+
+### 参考文档
+
+- [链上部署指南](docs/Chain-Deployment.md)

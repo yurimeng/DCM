@@ -22,3 +22,7 @@ __all__ = [
     "StakeService",
     "stake_service",
 ]
+
+# Sprint 5: 链上服务
+from .escrow_chain import chain_escrow_service
+from .stake_chain import chain_stake_service
