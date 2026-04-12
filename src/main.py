@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 
 from config import settings
 from .api import jobs_router, nodes_router, internal_router, disputes_router, wallet_router
-from .database import init_db
+from .database import init_db, SessionLocal
 
 
 @asynccontextmanager
@@ -35,10 +35,10 @@ async def lifespan(app: FastAPI):
 
 def _load_matching_state():
     """从数据库加载撮合状态到内存"""
-    from .database import SessionLocal
     from .models import Node, Job, JobStatus, NodeStatus
     from .models.db_models import JobDB, NodeDB, JobStatusDB, NodeStatusDB
     from .services import matching_service
+    from .core.wallet import wallet_service
     import json
     
     db = SessionLocal()
@@ -81,6 +81,11 @@ def _load_matching_state():
             print(f"  Loaded pending job: {db_job.job_id[:8]}...")
         
         print(f"Matching state loaded: {len(online_nodes)} nodes, {len(pending_jobs)} jobs")
+        
+        # 初始化钱包服务（TD-004：从数据库加载）
+        wallet_service._db_session = db
+        wallet_service.initialize_test_accounts()
+        print("Wallet state loaded from database.")
         
     finally:
         db.close()

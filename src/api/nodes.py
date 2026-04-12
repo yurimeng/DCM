@@ -208,10 +208,23 @@ async def submit_result(
     
     触发验证流程
     """
-    # 获取 Match
+    # 获取 Match (先从内存，再从数据库) - TD-001 修复
     match = matching_service.get_match_by_job(job_id)
+    
     if not match:
-        raise HTTPException(status_code=404, detail="Match not found")
+        # 从数据库查找 Match
+        db_match = db.query(MatchDB).filter(MatchDB.job_id == job_id).first()
+        if db_match:
+            # 转换为内存 Match 对象
+            from ..models import Match
+            match = Match(
+                job_id=db_match.job_id,
+                node_id=db_match.node_id,
+                locked_price=db_match.locked_price,
+            )
+            match.match_id = db_match.match_id
+        else:
+            raise HTTPException(status_code=404, detail="Match not found")
     
     # 检查是否是该节点
     if match.node_id != node_id:
@@ -237,13 +250,13 @@ async def submit_result(
 @router.post("/{node_id}/stake/deposit")
 async def deposit_stake(
     node_id: str,
-    tx_hash: str,
+    tx_hash: str = "mock-tx-hash",  # TD-003: 设为可选，默认mock值
     db: Session = Depends(get_db)
 ):
     """
     确认 Stake 存款
     
-    tx_hash: 链上交易哈希
+    tx_hash: 链上交易哈希 (可选，MVP阶段默认为mock)
     """
     # 获取节点信息
     node_repo = NodeRepository(db)

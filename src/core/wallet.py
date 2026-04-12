@@ -39,11 +39,14 @@ class MockWalletService:
     
     用于测试环境，模拟链上账户和余额操作
     正式环境应替换为真实的链上交互
+    
+    TD-004: 添加数据库持久化
     """
     
-    def __init__(self):
+    def __init__(self, db_session=None):
         self._accounts: Dict[str, Account] = {}
         self._initialized = False
+        self._db_session = db_session  # 数据库会话
     
     def initialize_test_accounts(self) -> Dict[str, Account]:
         """
@@ -53,9 +56,30 @@ class MockWalletService:
         - 3 个 Buyer 账户（各有 100 USDC）
         - 3 个 Node 账户（各有 50 USDC stake）
         - 1 个 System 账户（手续费收取）
+        
+        TD-004: 从数据库加载或创建账户
         """
         if self._initialized:
             return self._accounts
+        
+        # 尝试从数据库加载账户
+        if self._db_session:
+            try:
+                from ..models.db_models import WalletAccountDB
+                db_accounts = self._db_session.query(WalletAccountDB).all()
+                if db_accounts:
+                    for db_acc in db_accounts:
+                        self._accounts[db_acc.account_id] = Account(
+                            account_id=db_acc.account_id,
+                            address=db_acc.address,
+                            balance=db_acc.balance,
+                            role=db_acc.role,
+                            created_at=db_acc.created_at,
+                        )
+                    self._initialized = True
+                    return self._accounts
+            except Exception:
+                pass  # 数据库可能不存在，继续创建
         
         # Buyer 账户
         buyers = [
@@ -97,6 +121,9 @@ class MockWalletService:
         
         self._initialized = True
         
+        # 保存到数据库 (TD-004)
+        self._save_accounts_to_db()
+        
         # 记录初始化交易
         for account in self._accounts.values():
             self._add_tx(
@@ -108,6 +135,52 @@ class MockWalletService:
             )
         
         return self._accounts
+    
+    def _save_accounts_to_db(self) -> None:
+        """保存所有账户到数据库 (TD-004)"""
+        if not self._db_session:
+            return
+        
+        try:
+            from ..models.db_models import WalletAccountDB
+            for account in self._accounts.values():
+                db_acc = self._db_session.query(WalletAccountDB).filter(
+                    WalletAccountDB.account_id == account.account_id
+                ).first()
+                
+                if db_acc:
+                    db_acc.balance = account.balance
+                    db_acc.updated_at = datetime.utcnow()
+                else:
+                    db_acc = WalletAccountDB(
+                        account_id=account.account_id,
+                        address=account.address,
+                        balance=account.balance,
+                        role=account.role,
+                    )
+                    self._db_session.add(db_acc)
+            
+            self._db_session.commit()
+        except Exception as e:
+            self._db_session.rollback()
+    
+    def _save_balance_to_db(self, account_id: str) -> None:
+        """保存单个账户余额到数据库 (TD-004)"""
+        if not self._db_session:
+            return
+        
+        try:
+            from ..models.db_models import WalletAccountDB
+            db_acc = self._db_session.query(WalletAccountDB).filter(
+                WalletAccountDB.account_id == account_id
+            ).first()
+            
+            if db_acc and account_id in self._accounts:
+                db_acc.balance = self._accounts[account_id].balance
+                db_acc.updated_at = datetime.utcnow()
+                self._db_session.commit()
+        except Exception:
+            self._db_session.rollback()
     
     def create_account(self, role: str, initial_balance: float = 0.0) -> Account:
         """
@@ -184,6 +257,10 @@ class MockWalletService:
         # 执行转账
         from_account.balance -= amount
         to_account.balance += amount
+        
+        # 保存余额到数据库 (TD-004)
+        self._save_balance_to_db(from_id)
+        self._save_balance_to_db(to_id)
         
         # 记录交易
         tx_hash = self._add_tx(from_id, "transfer", to_id, -amount, memo)
@@ -263,6 +340,10 @@ class MockWalletService:
         system.balance -= amount
         buyer.balance += amount
         
+        # 保存余额到数据库 (TD-004)
+        self._save_balance_to_db("system")
+        self._save_balance_to_db(buyer_id)
+        
         self._add_tx(
             "system",
             "escrow_release",
@@ -315,6 +396,10 @@ class MockWalletService:
         # 结算给 Node
         system.balance -= node_amount
         node.balance += node_amount
+        
+        # 保存余额到数据库 (TD-004)
+        self._save_balance_to_db("system")
+        self._save_balance_to_db(node_id)
         
         self._add_tx(
             "system",

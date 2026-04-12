@@ -207,3 +207,32 @@ class AppealDB(Base):
     status = Column(String(20), default="submitted")  # submitted, reviewed, rejected, accepted
     submitted_at = Column(DateTime, default=datetime.utcnow)
     reviewed_at = Column(DateTime, nullable=True)
+
+
+class WalletAccountDB(Base):
+    """钱包账户数据库模型 (TD-004)"""
+    __tablename__ = "wallet_accounts"
+    
+    account_id = Column(String(36), primary_key=True)
+    address = Column(String(50), nullable=False)
+    balance = Column(Float, nullable=False, default=0.0)
+    role = Column(String(20), nullable=False)  # buyer, node, system
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class WalletTransactionDB(Base):
+    """钱包交易数据库模型 (TD-004)"""
+    __tablename__ = "wallet_transactions"
+    
+    tx_hash = Column(String(50), primary_key=True)
+    account_id = Column(String(36), ForeignKey("wallet_accounts.account_id"), nullable=False)
+    counterparty = Column(String(36), nullable=True)
+    tx_type = Column(String(30), nullable=False)  # initialize, transfer, escrow_lock, escrow_release, settle, etc.
+    amount = Column(Float, nullable=False)
+    balance_after = Column(Float, nullable=False)
+    memo = Column(Text, nullable=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    
+    # 关联
+    account = relationship("WalletAccountDB")
