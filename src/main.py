@@ -24,10 +24,66 @@ async def lifespan(app: FastAPI):
     init_db()
     print("Database initialized.")
     
+    # 从数据库加载状态到内存
+    _load_matching_state()
+    
     yield
     
     # 关闭时
     print("DCM shutting down...")
+
+
+def _load_matching_state():
+    """从数据库加载撮合状态到内存"""
+    from .database import SessionLocal
+    from .models import Node, Job, JobStatus, NodeStatus
+    from .models.db_models import JobDB, NodeDB, JobStatusDB, NodeStatusDB
+    from .services import matching_service
+    import json
+    
+    db = SessionLocal()
+    try:
+        # 加载 online nodes
+        online_nodes = db.query(NodeDB).filter(
+            NodeDB.status == NodeStatusDB.ONLINE
+        ).all()
+        
+        for db_node in online_nodes:
+            node = Node(
+                gpu_type=db_node.gpu_type,
+                vram_gb=db_node.vram_gb,
+                model_support=json.loads(db_node.model_support),
+                ask_price=float(db_node.ask_price),
+                avg_latency=int(db_node.avg_latency),
+                region=db_node.region,
+            )
+            node.node_id = db_node.node_id
+            node.status = NodeStatus.ONLINE
+            matching_service.register_node(node)
+            print(f"  Loaded online node: {db_node.node_id[:8]}...")
+        
+        # 加载 pending jobs
+        pending_jobs = db.query(JobDB).filter(
+            JobDB.status == JobStatusDB.PENDING
+        ).all()
+        
+        for db_job in pending_jobs:
+            job = Job(
+                model=db_job.model,
+                input_tokens=db_job.input_tokens,
+                output_tokens_limit=db_job.output_tokens_limit,
+                max_latency=db_job.max_latency,
+                bid_price=float(db_job.bid_price),
+            )
+            job.job_id = db_job.job_id
+            job.status = JobStatus.PENDING
+            matching_service.add_job(job)
+            print(f"  Loaded pending job: {db_job.job_id[:8]}...")
+        
+        print(f"Matching state loaded: {len(online_nodes)} nodes, {len(pending_jobs)} jobs")
+        
+    finally:
+        db.close()
 
 
 app = FastAPI(

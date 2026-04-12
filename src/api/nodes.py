@@ -110,8 +110,20 @@ async def node_online(
     # 更新数据库
     node_repo.update(node_id, status=NodeStatus.ONLINE)
     
-    # 更新内存服务
-    matching_service.update_node_status(node_id, NodeStatus.ONLINE)
+    # 注册节点到撮合引擎（内存服务）
+    from ..models import Node
+    import json
+    node_model = Node(
+        gpu_type=db_node.gpu_type,
+        vram_gb=db_node.vram_gb,
+        model_support=json.loads(db_node.model_support),
+        ask_price=float(db_node.ask_price),
+        avg_latency=int(db_node.avg_latency),
+        region=db_node.region,
+    )
+    node_model.node_id = node_id
+    node_model.status = NodeStatus.ONLINE
+    matching_service.register_node(node_model)
     
     return {
         "node_id": node_id,

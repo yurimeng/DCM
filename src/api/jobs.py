@@ -67,6 +67,17 @@ async def create_job(
         job_repo.update(job.job_id, status=JobStatus.MATCHED)
         db_job = job_repo.get(job.job_id)
         
+        # 保存 Match 到数据库
+        from ..models.db_models import MatchDB
+        db_match = MatchDB(
+            match_id=match.match_id,
+            job_id=match.job_id,
+            node_id=match.node_id,
+            locked_price=match.locked_price,
+            matched_at=match.matched_at,
+        )
+        db.add(db_match)
+        
         # 更新 Escrow
         db_escrow.match_id = match.match_id
         db.commit()

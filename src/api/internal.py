@@ -11,9 +11,10 @@ from datetime import datetime
 
 from ..database import get_db
 from ..models.db_models import JobDB, MatchDB, EscrowDB, EscrowStatusDB
-from ..models import JobStatus, EscrowStatus
+from ..models import JobStatus, EscrowStatus, NodeStatus
 from ..repositories import JobRepository, MatchRepository, EscrowRepository, NodeRepository
 from ..services import matching_service, escrow_service, verification_service, retry_service, stake_service
+from ..services.retry import FailureType
 from config import settings
 
 router = APIRouter(prefix="/internal/v1", tags=["internal"])
@@ -33,10 +34,10 @@ class ResultSubmitRequest(BaseModel):
 class VerificationResponse(BaseModel):
     """验证响应"""
     verified: bool
-    layer: int
     layer: int = Field(..., description="验证层级 (1 或 2)")
     failure_reason: Optional[str] = None
     penalty_applied: Optional[str] = None
+    retried: Optional[bool] = Field(None, description="是否已重试")
     similarity: Optional[float] = None
 
 
@@ -229,17 +230,26 @@ async def verify_result_endpoint(
     
     if not layer1_passed:
         # Layer 1 失败 → 触发重试
-        retry_service.handle_failure(
+        retry_result = retry_service.handle_failure(
             match=match,
             job=job,
-            failure_type=retry_service.FailureType.VERIFICATION_FAILED,
+            failure_type=FailureType.VERIFICATION_FAILED,
             reason=failure_reason,
         )
+        
+        # 更新数据库中的 Job 状态
+        if retry_result:
+            # 有重试，更新原 Job 为 failed
+            job_repo.update(job.job_id, status=JobStatus.FAILED)
+        else:
+            # 无重试（已达上限），更新为 failed
+            job_repo.update(job.job_id, status=JobStatus.FAILED)
         
         return VerificationResponse(
             verified=False,
             layer=1,
             failure_reason=failure_reason,
+            retried=retry_result is not None,
         )
     
     # Layer 1 通过，检查延迟
@@ -526,34 +536,54 @@ async def handle_retry_endpoint(
     }
 
 
+class FreezeStakeRequest(BaseModel):
+    """冻结 Stake 请求"""
+    node_id: str
+    reason: str
+    match_ids: List[str]
+
+
 # ===== Stake/争议接口 =====
 
 @router.post("/stake/freeze")
 async def freeze_stake_endpoint(
-    node_id: str,
-    reason: str,
-    match_ids: List[str],
+    request: FreezeStakeRequest,
     db: Session = Depends(get_db)
 ):
     """
     冻结节点 Stake（内部接口）
     """
     dispute = stake_service.freeze_stake(
-        node_id=node_id,
-        reason=reason,
-        match_ids=match_ids,
+        node_id=request.node_id,
+        reason=request.reason,
+        match_ids=request.match_ids,
     )
+    
+    # 保存争议到数据库
+    from ..models.db_models import DisputeDB
+    db_dispute = DisputeDB(
+        dispute_id=dispute.dispute_id,
+        node_id=dispute.node_id,
+        match_ids=",".join(dispute.match_ids),
+        reason=dispute.reason,
+        status="frozen",
+        frozen_at=dispute.frozen_at,
+        appeal_deadline=dispute.appeal_deadline,
+    )
+    db.add(db_dispute)
     
     # 节点状态设为 locked
     node_repo = NodeRepository(db)
-    node_repo.update(node_id, status="locked")
+    node_repo.update(request.node_id, status=NodeStatus.LOCKED)
+    
+    db.commit()
     
     # 更新内存服务
-    matching_service.update_node_status(node_id, "locked")
+    matching_service.update_node_status(request.node_id, NodeStatus.LOCKED)
     
     return {
         "dispute_id": dispute.dispute_id,
-        "node_id": node_id,
+        "node_id": request.node_id,
         "status": dispute.status.value,
         "appeal_deadline": dispute.appeal_deadline.isoformat() if dispute.appeal_deadline else None,
     }

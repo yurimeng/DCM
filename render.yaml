@@ -1,0 +1,22 @@
+# Render Blueprint - DCM API
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: dcm-api
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: DCM_DATABASE_URL
+        value: sqlite:///./data/dcm.db
+      - key: DCM_MVP_MODE
+        value: "true"
+    disk:
+      name: dcm-data
+      mountPath: /app/data
+      sizeGB: 1
