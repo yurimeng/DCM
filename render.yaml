@@ -12,8 +12,8 @@ services:
     envVars:
       - key: PORT
         value: 8080
-      - key: DCM_DATABASE_URL
-        value: sqlite:///./data/dcm.db
+      - key: DCM_DATABASE_PATH
+        value: /app/data/dcm.db
       - key: DCM_MVP_MODE
         value: "true"
     # 注意: 免费版无持久化磁盘，数据重启后丢失（用于测试）

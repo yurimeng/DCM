@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     
     # ===== 数据库 =====
     database_url: str = "sqlite:///./dcm.db"
+    database_path: str = "/app/data/dcm.db"
     
     # ===== API 配置 =====
     api_host: str = "0.0.0.0"

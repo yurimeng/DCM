@@ -3,22 +3,29 @@ Database Module - SQLAlchemy Setup
 来源: PRD 0.2 Section 10.1 & Function/F8
 """
 
+import os
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import StaticPool
 from config import settings
 
+# 使用绝对路径（优先使用 database_path）
+db_path = settings.database_path
+db_url = f"sqlite:///{db_path}"
+
 # 创建引擎
-if "sqlite" in settings.database_url:
+if "sqlite" in db_url:
+    # 确保目录存在
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
     # SQLite 特殊配置
     engine = create_engine(
-        settings.database_url,
+        db_url,
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
         echo=False,
     )
 else:
-    engine = create_engine(settings.database_url)
+    engine = create_engine(db_url)
 
 # Session
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

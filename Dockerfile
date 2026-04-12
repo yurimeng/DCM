@@ -1,5 +1,5 @@
 # DCM - Decentralized Compute Market
-# Dockerfile for Cloudflare Container Deployment
+# Dockerfile for Cloud Deployment
 
 FROM python:3.11-slim
 
@@ -18,16 +18,20 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create non-root user
-RUN useradd -m appuser && chown -R appuser:appuser /app
-USER appuser
+# Create data directory for SQLite
+RUN mkdir -p /app/data && chmod 755 /app/data
+
+# Create non-root user (commented out for simplicity)
+# RUN useradd -m appuser && chown -R appuser:appuser /app
+# USER appuser
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1
+ENV PORT=8080
 
-# Health check (Fly.io uses PORT env)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${PORT:-8080}/health || exit 1
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
 
-# Run the application (use PORT from env, default to 8080)
+# Run the application
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]
