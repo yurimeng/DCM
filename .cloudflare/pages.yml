@@ -1,0 +1,29 @@
+# Cloudflare Pages Configuration
+# https://developers.cloudflare.com/pages/
+
+name: dcm-api
+compatibility_date: 2024-01-01
+
+# Build settings
+build:
+  command: pip install -r requirements.txt
+  output_directory: dist
+
+# Redirects (for SPA-like behavior)
+redirects:
+  /api/*: /api/:splat
+
+# Headers
+headers:
+  /api/*:
+    cache-control: public, max-age=60
+  /*:
+    cache-control: public, max-age=3600
+    x-frame-options: DENY
+    x-content-type-options: nosniff
+
+# Routes
+routes:
+  - pattern: api/*
+    zone_name: your-domain.com
+    distribution: Proxied

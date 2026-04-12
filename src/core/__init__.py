@@ -1,5 +1,11 @@
 """
-DCM - Core Business Logic
+DCM Core Package
 """
 
-__all__ = []
+from .wallet import wallet_service, MockWalletService, Account
+
+__all__ = [
+    "wallet_service",
+    "MockWalletService",
+    "Account",
+]
