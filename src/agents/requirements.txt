@@ -1,0 +1,12 @@
+# Node Agent Dependencies
+
+# HTTP & WebSocket
+websocket-client>=1.7.0
+requests>=2.31.0
+
+# Utilities
+python-dotenv>=1.0.0
+PyYAML>=6.0
+
+# Logging
+colorlog>=6.8.0

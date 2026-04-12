@@ -111,6 +111,7 @@ class MatchDB(Base):
     # 执行结果
     result_hash = Column(String(100), nullable=True)
     actual_latency_ms = Column(Integer, nullable=True)
+    error_message = Column(Text, nullable=True)  # Node Agent 错误信息
     
     # 验证
     verified = Column(Boolean, default=False)

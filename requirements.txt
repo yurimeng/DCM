@@ -16,5 +16,9 @@ pytest-asyncio>=0.23.0
 pytest-cov>=4.1.0
 httpx>=0.26.0
 
+# Node Agent
+websocket-client>=1.7.0
+requests>=2.31.0
+
 # Utilities
 python-dotenv>=1.0.0

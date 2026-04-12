@@ -11,7 +11,7 @@ F1 Job提交 ──┬── F3 撮合 ──┬── F5 验证 ──┬──
             │             │             │
             │             │             └── F4 重试
             │             │
-            │             └── F2 节点状态
+            │             └── F2 节点状态 ← Node Agent SDK
             │
             └── F6 Escrow
 
@@ -55,14 +55,16 @@ F2 节点注册 ── F7 Stake/争议
 | F7 争议/申诉 | ✅ | 冻结/申诉 API |
 | 测试覆盖 | ✅ | 48 tests, 67% coverage |
 
-### Sprint 3: 节点客户端 🔴
+### Sprint 3: Node Agent SDK ✅
 
-| 任务 | 优先级 | 依赖 | 工作量 |
-|------|--------|------|--------|
-| Node Agent 规范 | P0 | Sprint 2 | 2h |
-| Node Agent SDK | P0 | 规范 | 8h |
-| WebSocket 通信 | P1 | SDK | 4h |
-| 心跳机制 | P0 | SDK | 2h |
+| 任务 | 状态 | 说明 |
+|------|------|------|
+| F2-NodeAgent 规范 | ✅ | docs/F2-NodeAgent-Spec.md |
+| Node Agent SDK | ✅ | src/agents/node_agent.py |
+| WebSocket 通信 | ✅ | 实时推送模式 |
+| HTTP Polling 通信 | ✅ | 降级模式 |
+| 心跳机制 | ✅ | 30s 间隔 |
+| 测试覆盖 | ✅ | 62 tests, 62% coverage |
 
 ### Sprint 4: 链上集成 🔴
 
@@ -91,7 +93,7 @@ F2 节点注册 ── F7 Stake/争议
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/jobs` | POST | 创建 Job |
-| `/jobs/{job_id}` | GET | 获取详情 |
+| `/jobs/{job_id}` | GET | 详情 |
 | `/jobs/{job_id}/escrow` | GET | Escrow 状态 |
 | `/jobs` | GET | 列表 |
 | `/jobs/stats/summary` | GET | 统计 |
@@ -106,7 +108,10 @@ F2 节点注册 ── F7 Stake/争议
 | `/nodes/{node_id}/poll` | POST | 拉取 Job |
 | `/nodes/{node_id}/jobs/{job_id}/result` | POST | 提交结果 |
 | `/nodes/{node_id}/stake/deposit` | POST | 存款确认 |
+| `/nodes/{node_id}/heartbeat` | POST | 心跳 |
+| `/nodes/{node_id}/jobs/{job_id}/error` | POST | 报告错误 |
 | `/nodes/{node_id}/status` | GET | 状态 |
+| `/nodes/{node_id}/config` | GET | 配置信息 |
 
 ### Internal API (`/internal/v1`)
 | 端点 | 方法 | 说明 |
@@ -118,19 +123,12 @@ F2 节点注册 ── F7 Stake/争议
 | `/settlement/execute` | POST | 执行结算 |
 | `/retry/handle` | POST | 处理重试 |
 | `/stake/freeze` | POST | 冻结 Stake |
-| `/disputes/{id}` | GET | 争议详情 |
-| `/stats/failures` | GET | 失败统计 |
-| `/stats/verification` | GET | 验证统计 |
 
 ### Disputes API (`/api/v1/disputes`)
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/disputes/{id}` | GET | 争议详情 |
-| `/disputes/node/{node_id}` | GET | 节点争议 |
-| `/disputes` | GET | 列表 |
 | `/disputes/{id}/appeals` | POST | 提交申诉 |
-| `/disputes/{id}/appeals/{id}` | GET | 申诉详情 |
-| `/disputes/appeals` | GET | 申诉列表 |
 | `/disputes/stats/summary` | GET | 统计 |
 
 ---
@@ -166,7 +164,37 @@ failure: latency > max_latency × 1.5 → refund 100%
 
 ---
 
-## 五、技术栈
+## 五、Node Agent SDK
+
+### 目录结构
+```
+src/agents/
+├── __init__.py
+├── node_agent.py       # 主 SDK
+├── requirements.txt    # 依赖
+└── config.yaml.example # 配置示例
+```
+
+### 使用方式
+```bash
+# 1. 安装依赖
+pip install -r src/agents/requirements.txt
+
+# 2. 配置
+cp src/agents/config.yaml.example src/agents/config.yaml
+# 编辑 config.yaml 填入 node_id
+
+# 3. 启动 Ollama
+ollama serve &
+ollama pull llama3-8b
+
+# 4. 启动 Node Agent
+python -m src.agents.node_agent --node-id <your-node-id>
+```
+
+---
+
+## 六、技术栈
 
 | 组件 | 技术 |
 |------|------|
@@ -174,23 +202,25 @@ failure: latency > max_latency × 1.5 → refund 100%
 | 数据库 | SQLite (MVP) → PostgreSQL (1.0) |
 | ORM | SQLAlchemy |
 | 链 | Solana/Base (USDC) |
+| 节点通信 | WebSocket + HTTP Polling |
 | 验证 | SHA256 + ROUGE-L (简化) |
 | 测试 | pytest |
 
 ---
 
-## 六、测试结果
+## 七、测试结果
 
 | Sprint | 测试数 | 通过 | 覆盖率 |
 |--------|--------|------|--------|
 | Sprint 0 | 14 | 14 | 47% |
 | Sprint 1 | 15 | 15 | 65% |
 | Sprint 2 | 19 | 19 | 67% |
-| **总计** | **48** | **48** | **67%** |
+| Sprint 3 | 14 | 14 | 62% |
+| **总计** | **62** | **62** | **62%** |
 
 ---
 
-## 七、启动命令
+## 八、启动命令
 
 ```bash
 # 安装依赖
@@ -199,8 +229,11 @@ pip install -r requirements.txt
 # 初始化数据库
 python scripts/init_db.py
 
-# 启动服务
+# 启动 Router 服务
 uvicorn src.main:app --reload
+
+# 启动 Node Agent（需要先注册节点）
+python -m src.agents.node_agent --node-id <node-id>
 
 # 运行测试
 pytest tests/ -v
@@ -211,8 +244,7 @@ pytest tests/ --cov=src --cov-report=html
 
 ---
 
-## 八、下一步
+## 九、下一步
 
-1. **Sprint 3**: Node Agent SDK 开发
-2. **Sprint 4**: 链上 Escrow/Stake 合约
-3. **Sprint 5**: 集成测试 + 部署
+1. **Sprint 4**: 链上 Escrow/Stake 合约
+2. **Sprint 5**: 集成测试 + 部署

@@ -6,6 +6,7 @@ Nodes API - F2: 节点注册与状态管理
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from typing import Optional, List
+from datetime import datetime
 
 from ..database import get_db
 from ..models import Node, NodeCreate, NodeResponse, NodeStatus, NodePollResponse, NodeResultSubmit
@@ -334,4 +335,84 @@ async def list_nodes(
         "total": db.query(NodeDB).count(),
         "limit": limit,
         "offset": offset,
+    }
+
+
+@router.post("/{node_id}/heartbeat")
+async def node_heartbeat(
+    node_id: str,
+    heartbeat_data: dict,
+    db: Session = Depends(get_db)
+):
+    """
+    节点心跳（HTTP Polling 模式）
+    
+    Node Agent 定期发送心跳，报告状态
+    """
+    node_repo = NodeRepository(db)
+    db_node = node_repo.get(node_id)
+    
+    if not db_node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    # 更新心跳时间
+    node_repo.update_heartbeat(node_id)
+    
+    return {
+        "node_id": node_id,
+        "status": heartbeat_data.get("status", "idle"),
+        "timestamp": int(datetime.utcnow().timestamp() * 1000),
+    }
+
+
+@router.post("/{node_id}/jobs/{job_id}/error")
+async def report_job_error(
+    node_id: str,
+    job_id: str,
+    error_data: dict,
+    db: Session = Depends(get_db)
+):
+    """
+    节点报告 Job 执行错误
+    """
+    match_repo = MatchRepository(db)
+    db_match = match_repo.get_by_job(job_id)
+    
+    if not db_match or db_match.node_id != node_id:
+        raise HTTPException(status_code=404, detail="Match not found")
+    
+    error_type = error_data.get("error_type", "unknown")
+    error_message = error_data.get("error_message", "")
+    
+    # 更新 Match 记录
+    match_repo.update(db_match.match_id, error_message=error_message)
+    
+    return {
+        "received": True,
+        "job_id": job_id,
+        "error_type": error_type,
+    }
+
+
+@router.get("/{node_id}/config")
+async def get_node_config(
+    node_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    获取节点配置信息（用于 Node Agent 初始化）
+    """
+    node_repo = NodeRepository(db)
+    db_node = node_repo.get(node_id)
+    
+    if not db_node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    return {
+        "node_id": db_node.node_id,
+        "model": "llama3-8b",  # MVP 固定
+        "ask_price": db_node.ask_price,
+        "avg_latency": db_node.avg_latency,
+        "heartbeat_interval": 30,
+        "max_concurrent_jobs": 1,  # MVP 固定
     }

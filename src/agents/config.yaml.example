@@ -1,0 +1,27 @@
+# Node Agent Configuration Example
+# Copy to config.yaml and fill in your values
+
+router:
+  host: "localhost"
+  port: 8000
+  use_websocket: true  # false = HTTP polling
+  poll_interval: 5      # seconds (HTTP mode only)
+  reconnect_interval: 10  # seconds
+  max_retries: 3
+
+ollama:
+  host: "localhost"
+  port: 11434
+  model: "llama3-8b"
+  timeout: 60  # seconds
+
+agent:
+  # Fill in after registering node
+  node_id: ""
+  
+  heartbeat_interval: 30  # seconds
+  max_concurrent_jobs: 1  # MVP only supports 1
+
+logging:
+  level: "INFO"
+  file: "node_agent.log"
