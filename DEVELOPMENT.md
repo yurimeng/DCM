@@ -15,7 +15,7 @@ F1 Job提交 ──┬── F3 撮合 ──┬── F5 验证 ──┬──
             │
             └── F6 Escrow
 
-F2 节点注册 ── F7 Stake
+F2 节点注册 ── F7 Stake/争议
 ```
 
 ---
@@ -43,15 +43,17 @@ F2 节点注册 ── F7 Stake
 | Repository 层 | ✅ | 数据访问抽象 |
 | 测试覆盖 | ✅ | 29 tests, 73% coverage |
 
-### Sprint 2: 核心业务逻辑 🔴
+### Sprint 2: 核心业务逻辑 ✅
 
-| 任务 | 优先级 | 依赖 | 工作量 |
-|------|--------|------|--------|
-| F3 撮合引擎完善 | P0 | Sprint 1 | 6h |
-| F5 验证服务完善 | P0 | F3 | 4h |
-| F4 失败重试机制 | P0 | F3, F5 | 4h |
-| F6 结算服务完善 | P0 | F5 | 4h |
-| F7 Stake 服务完善 | P1 | F5 | 3h |
+| 任务 | 状态 | 说明 |
+|------|------|------|
+| Internal API | ✅ | /internal/v1/* 端点 |
+| F3 撮合完善 | ✅ | 数据库持久化 |
+| F4 重试机制 | ✅ | 2次重试，排他节点 |
+| F5 验证服务 | ✅ | Layer1 + 10% Layer2 |
+| F6 结算服务 | ✅ | 95%/5% 分配 |
+| F7 争议/申诉 | ✅ | 冻结/申诉 API |
+| 测试覆盖 | ✅ | 48 tests, 67% coverage |
 
 ### Sprint 3: 节点客户端 🔴
 
@@ -83,99 +85,108 @@ F2 节点注册 ── F7 Stake
 
 ---
 
-## 三、P0 上线前必须完成
+## 三、API 端点总览
 
-### PRD 开放问题
+### Jobs API (`/api/v1/jobs`)
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/jobs` | POST | 创建 Job |
+| `/jobs/{job_id}` | GET | 获取详情 |
+| `/jobs/{job_id}/escrow` | GET | Escrow 状态 |
+| `/jobs` | GET | 列表 |
+| `/jobs/stats/summary` | GET | 统计 |
 
-| 问题 | 行动项 | 负责人 | 状态 |
-|------|--------|--------|------|
-| Q1: Layer 2 相似度阈值 | MVP 前用 100+ Job 跑基准 | 待定 | 🔴 |
-| Q2: Stake 门槛确认 | 5-10 个节点访谈 | 待定 | 🔴 |
-| Q3: Node Agent 规范 | 完成 F2-NodeAgent 规范 | 待定 | 🔴 |
+### Nodes API (`/api/v1/nodes`)
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/nodes` | POST | 注册节点 |
+| `/nodes/{node_id}` | GET | 详情 |
+| `/nodes/{node_id}/online` | POST | 上线 |
+| `/nodes/{node_id}/offline` | POST | 下线 |
+| `/nodes/{node_id}/poll` | POST | 拉取 Job |
+| `/nodes/{node_id}/jobs/{job_id}/result` | POST | 提交结果 |
+| `/nodes/{node_id}/stake/deposit` | POST | 存款确认 |
+| `/nodes/{node_id}/status` | GET | 状态 |
 
-### 技术闭环标准
+### Internal API (`/internal/v1`)
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/match/trigger` | POST | 触发撮合 |
+| `/match/poll` | POST | 节点拉取 |
+| `/verify` | POST | 验证结果 |
+| `/verify/layer2` | POST | Layer2 结果 |
+| `/settlement/execute` | POST | 执行结算 |
+| `/retry/handle` | POST | 处理重试 |
+| `/stake/freeze` | POST | 冻结 Stake |
+| `/disputes/{id}` | GET | 争议详情 |
+| `/stats/failures` | GET | 失败统计 |
+| `/stats/verification` | GET | 验证统计 |
 
-| 指标 | 通过标准 | 当前状态 |
-|------|---------|---------|
-| 全流程延迟 | < 10s | 🔴 |
-| 结算自动化 | 100% | 🟡 |
-| Escrow 完整性 | 无丢失 | 🟡 |
-| 验证机制 | Layer1 + Layer2 | 🟡 |
+### Disputes API (`/api/v1/disputes`)
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/disputes/{id}` | GET | 争议详情 |
+| `/disputes/node/{node_id}` | GET | 节点争议 |
+| `/disputes` | GET | 列表 |
+| `/disputes/{id}/appeals` | POST | 提交申诉 |
+| `/disputes/{id}/appeals/{id}` | GET | 申诉详情 |
+| `/disputes/appeals` | GET | 申诉列表 |
+| `/disputes/stats/summary` | GET | 统计 |
 
 ---
 
-## 四、代码目录结构
+## 四、核心公式
 
+### Escrow 计算
 ```
-~/Code/Platform/DCM/
-├── src/
-│   ├── __init__.py
-│   ├── main.py              # FastAPI 入口
-│   ├── config.py            # 配置
-│   ├── database.py          # 数据库配置
-│   ├── repositories.py      # Repository 层
-│   ├── api/                 # API 路由
-│   │   ├── __init__.py
-│   │   ├── jobs.py          # F1 Job API
-│   │   └── nodes.py         # F2 Node API
-│   ├── core/                # 核心逻辑
-│   ├── services/            # 服务层
-│   │   ├── escrow.py        # F6 结算
-│   │   ├── matching.py      # F3 撮合
-│   │   ├── verification.py  # F5 验证
-│   │   ├── retry.py         # F4 重试
-│   │   └── stake.py         # F7 Stake
-│   ├── models/              # 数据模型
-│   │   ├── job.py
-│   │   ├── node.py
-│   │   ├── match.py
-│   │   ├── escrow.py
-│   │   └── db_models.py     # SQLAlchemy ORM
-│   ├── agents/              # Node Agent 客户端
-│   └── utils/               # 工具函数
-├── tests/
-│   ├── conftest.py          # Pytest fixtures
-│   ├── unit/
-│   │   ├── test_models.py
-│   │   └── test_api.py
-│   ├── integration/
-│   └── e2e/
-├── scripts/
-│   └── init_db.py           # 数据库初始化
-├── infra/
-│   ├── docker/
-│   ├── k8s/
-│   └── scripts/
-├── docs/
-├── requirements.txt
-├── pytest.ini
-├── config.py
-├── README.md
-└── DEVELOPMENT.md
+escrow_amount = bid_price × (input_tokens + output_tokens_limit) / 1M × 1.1
+```
+
+### 结算分配
+```
+cost = locked_price × actual_tokens / 1M
+node_earn = cost × 0.95
+platform_fee = cost × 0.05
+refund = locked_amount - cost
+```
+
+### 撮合条件
+```
+job.bid_price >= node.ask_price
+node.avg_latency <= job.max_latency
+node.status == "online"
+node.model_support contains job.model
+```
+
+### 延迟处罚
+```
+mild_penalty: max_latency < latency <= max_latency × 1.5 → cost × 0.7
+failure: latency > max_latency × 1.5 → refund 100%
 ```
 
 ---
 
 ## 五、技术栈
 
-| 组件 | 当前选择 | 说明 |
-|------|---------|------|
-| API | FastAPI | REST + 可选 WebSocket |
-| 数据库 | SQLite | MVP; PostgreSQL (1.0) |
-| ORM | SQLAlchemy | 数据访问 |
-| 链 | Solana/Base | USDC 结算 |
-| 验证 | SHA256 + ROUGE-L | Layer 1 + Layer 2 |
-| 测试 | pytest | 单元 + 集成测试 |
+| 组件 | 技术 |
+|------|------|
+| API | FastAPI |
+| 数据库 | SQLite (MVP) → PostgreSQL (1.0) |
+| ORM | SQLAlchemy |
+| 链 | Solana/Base (USDC) |
+| 验证 | SHA256 + ROUGE-L (简化) |
+| 测试 | pytest |
 
 ---
 
-## 六、测试覆盖
+## 六、测试结果
 
-| 指标 | 值 |
-|------|------|
-| 测试总数 | 29 |
-| 通过率 | 100% |
-| 代码覆盖率 | 73% |
+| Sprint | 测试数 | 通过 | 覆盖率 |
+|--------|--------|------|--------|
+| Sprint 0 | 14 | 14 | 47% |
+| Sprint 1 | 15 | 15 | 65% |
+| Sprint 2 | 19 | 19 | 67% |
+| **总计** | **48** | **48** | **67%** |
 
 ---
 
@@ -200,8 +211,8 @@ pytest tests/ --cov=src --cov-report=html
 
 ---
 
-## 八、下一步行动
+## 八、下一步
 
-1. **Sprint 2**: 完善 F3-F7 核心业务逻辑
-2. **Sprint 3**: Node Agent SDK 开发
-3. **Sprint 4**: 链上 Escrow/Stake 合约
+1. **Sprint 3**: Node Agent SDK 开发
+2. **Sprint 4**: 链上 Escrow/Stake 合约
+3. **Sprint 5**: 集成测试 + 部署

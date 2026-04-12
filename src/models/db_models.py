@@ -205,3 +205,4 @@ class AppealDB(Base):
     message = Column(Text, nullable=False)
     status = Column(String(20), default="submitted")  # submitted, reviewed, rejected, accepted
     submitted_at = Column(DateTime, default=datetime.utcnow)
+    reviewed_at = Column(DateTime, nullable=True)
