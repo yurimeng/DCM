@@ -4,247 +4,148 @@
 
 ---
 
-## 一、模块依赖关系
+## 一、项目进度
+
+| Sprint | 状态 | 测试数 | 覆盖率 |
+|--------|------|--------|--------|
+| Sprint 0: 基础设施 | ✅ | 14 | 47% |
+| Sprint 1: API + 数据库 | ✅ | 15 | 65% |
+| Sprint 2: 核心业务逻辑 | ✅ | 19 | 67% |
+| Sprint 3: Node Agent SDK | ✅ | 14 | 62% |
+| **Mock Wallet + Cloudflare** | ✅ | 14 | 64% |
+| Sprint 5: 测试 + 部署 | 🔴 | - | - |
+| Sprint 6: 链上集成 | 🔴 | - | - |
+
+---
+
+## 二、快速开始
+
+### 1. 启动服务
+
+```bash
+# Docker (推荐)
+docker-compose up -d
+
+# 或直接运行
+pip install -r requirements.txt
+uvicorn src.main:app --reload
+```
+
+### 2. 初始化测试钱包
+
+```bash
+curl -X POST http://localhost:8000/api/v1/wallet/initialize
+```
+
+### 3. 测试 API
+
+```bash
+# 查看账户
+curl http://localhost:8000/api/v1/wallet/accounts
+
+# 提交 Job
+curl -X POST http://localhost:8000/api/v1/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama3-8b",
+    "input_tokens": 2048,
+    "output_tokens_limit": 1024,
+    "max_latency": 5000,
+    "bid_price": 0.35
+  }'
+```
+
+### 4. 查看文档
 
 ```
-F1 Job提交 ──┬── F3 撮合 ──┬── F5 验证 ──┬── F6 结算
-            │             │             │
-            │             │             └── F4 重试
-            │             │
-            │             └── F2 节点状态 ← Node Agent SDK
-            │
-            └── F6 Escrow
-
-F2 节点注册 ── F7 Stake/争议
+http://localhost:8000/docs
 ```
 
 ---
 
-## 二、Sprint 规划
+## 三、API 端点
 
-### Sprint 0: 基础设施 ✅
-
-| 任务 | 状态 | 说明 |
+### Wallet API (`/api/v1/wallet`)
+| 端点 | 方法 | 说明 |
 |------|------|------|
-| 项目结构 | ✅ | src/, tests/, infra/, docs/ |
-| 配置管理 | ✅ | config.py, .env.example |
-| 数据模型 | ✅ | Job, Node, Match, Escrow |
-| 核心服务 | ✅ | Escrow, Matching, Verification, Retry, Stake |
-| API 路由 | ✅ | /api/v1/jobs, /api/v1/nodes |
-| 单元测试 | ✅ | 基本测试覆盖 |
-
-### Sprint 1: API 完善 + 数据库 ✅
-
-| 任务 | 状态 | 说明 |
-|------|------|------|
-| 数据库集成 | ✅ | SQLAlchemy + SQLite |
-| F1 Job API 完善 | ✅ | CRUD + Escrow |
-| F2 Node API 完善 | ✅ | 注册/上线/拉取 |
-| Repository 层 | ✅ | 数据访问抽象 |
-| 测试覆盖 | ✅ | 29 tests, 73% coverage |
-
-### Sprint 2: 核心业务逻辑 ✅
-
-| 任务 | 状态 | 说明 |
-|------|------|------|
-| Internal API | ✅ | /internal/v1/* 端点 |
-| F3 撮合完善 | ✅ | 数据库持久化 |
-| F4 重试机制 | ✅ | 2次重试，排他节点 |
-| F5 验证服务 | ✅ | Layer1 + 10% Layer2 |
-| F6 结算服务 | ✅ | 95%/5% 分配 |
-| F7 争议/申诉 | ✅ | 冻结/申诉 API |
-| 测试覆盖 | ✅ | 48 tests, 67% coverage |
-
-### Sprint 3: Node Agent SDK ✅
-
-| 任务 | 状态 | 说明 |
-|------|------|------|
-| F2-NodeAgent 规范 | ✅ | docs/F2-NodeAgent-Spec.md |
-| Node Agent SDK | ✅ | src/agents/node_agent.py |
-| WebSocket 通信 | ✅ | 实时推送模式 |
-| HTTP Polling 通信 | ✅ | 降级模式 |
-| 心跳机制 | ✅ | 30s 间隔 |
-| 测试覆盖 | ✅ | 62 tests, 62% coverage |
-
-### Sprint 4: 链上集成 🔴
-
-| 任务 | 优先级 | 依赖 | 工作量 |
-|------|--------|------|--------|
-| Escrow 合约接口 | P0 | Sprint 2 | 6h |
-| Stake 合约接口 | P0 | Sprint 3 | 4h |
-| USDC 转账集成 | P0 | 合约 | 4h |
-| 链上事件监听 | P1 | 合约 | 3h |
-
-### Sprint 5: 测试 + 部署 🔴
-
-| 任务 | 优先级 | 依赖 | 工作量 |
-|------|--------|------|--------|
-| 集成测试 | P0 | Sprint 1-4 | 8h |
-| E2E 测试 | P0 | Sprint 4 | 6h |
-| Docker 配置 | P0 | Sprint 0 | 2h |
-| CI/CD 配置 | P1 | Docker | 4h |
-| 部署文档 | P1 | CI/CD | 2h |
-
----
-
-## 三、API 端点总览
+| `/wallet/initialize` | POST | 初始化测试账户 |
+| `/wallet/accounts` | GET | 列出账户 |
+| `/wallet/accounts/{id}` | GET | 账户详情 |
+| `/wallet/accounts/{id}/balance` | GET | 余额 |
+| `/wallet/escrow/lock` | POST | Escrow 锁定 |
+| `/wallet/escrow/settle` | POST | Escrow 结算 |
 
 ### Jobs API (`/api/v1/jobs`)
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/jobs` | POST | 创建 Job |
-| `/jobs/{job_id}` | GET | 详情 |
-| `/jobs/{job_id}/escrow` | GET | Escrow 状态 |
-| `/jobs` | GET | 列表 |
-| `/jobs/stats/summary` | GET | 统计 |
+| `/jobs/{id}` | GET | 详情 |
+| `/jobs/{id}/escrow` | GET | Escrow 状态 |
 
 ### Nodes API (`/api/v1/nodes`)
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/nodes` | POST | 注册节点 |
-| `/nodes/{node_id}` | GET | 详情 |
-| `/nodes/{node_id}/online` | POST | 上线 |
-| `/nodes/{node_id}/offline` | POST | 下线 |
-| `/nodes/{node_id}/poll` | POST | 拉取 Job |
-| `/nodes/{node_id}/jobs/{job_id}/result` | POST | 提交结果 |
-| `/nodes/{node_id}/stake/deposit` | POST | 存款确认 |
-| `/nodes/{node_id}/heartbeat` | POST | 心跳 |
-| `/nodes/{node_id}/jobs/{job_id}/error` | POST | 报告错误 |
-| `/nodes/{node_id}/status` | GET | 状态 |
-| `/nodes/{node_id}/config` | GET | 配置信息 |
-
-### Internal API (`/internal/v1`)
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/match/trigger` | POST | 触发撮合 |
-| `/match/poll` | POST | 节点拉取 |
-| `/verify` | POST | 验证结果 |
-| `/verify/layer2` | POST | Layer2 结果 |
-| `/settlement/execute` | POST | 执行结算 |
-| `/retry/handle` | POST | 处理重试 |
-| `/stake/freeze` | POST | 冻结 Stake |
-
-### Disputes API (`/api/v1/disputes`)
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/disputes/{id}` | GET | 争议详情 |
-| `/disputes/{id}/appeals` | POST | 提交申诉 |
-| `/disputes/stats/summary` | GET | 统计 |
+| `/nodes/{id}/poll` | POST | 拉取 Job |
+| `/nodes/{id}/stake/deposit` | POST | Stake 存款 |
 
 ---
 
-## 四、核心公式
+## 四、部署
 
-### Escrow 计算
-```
-escrow_amount = bid_price × (input_tokens + output_tokens_limit) / 1M × 1.1
-```
-
-### 结算分配
-```
-cost = locked_price × actual_tokens / 1M
-node_earn = cost × 0.95
-platform_fee = cost × 0.05
-refund = locked_amount - cost
-```
-
-### 撮合条件
-```
-job.bid_price >= node.ask_price
-node.avg_latency <= job.max_latency
-node.status == "online"
-node.model_support contains job.model
-```
-
-### 延迟处罚
-```
-mild_penalty: max_latency < latency <= max_latency × 1.5 → cost × 0.7
-failure: latency > max_latency × 1.5 → refund 100%
-```
-
----
-
-## 五、Node Agent SDK
-
-### 目录结构
-```
-src/agents/
-├── __init__.py
-├── node_agent.py       # 主 SDK
-├── requirements.txt    # 依赖
-└── config.yaml.example # 配置示例
-```
-
-### 使用方式
-```bash
-# 1. 安装依赖
-pip install -r src/agents/requirements.txt
-
-# 2. 配置
-cp src/agents/config.yaml.example src/agents/config.yaml
-# 编辑 config.yaml 填入 node_id
-
-# 3. 启动 Ollama
-ollama serve &
-ollama pull llama3-8b
-
-# 4. 启动 Node Agent
-python -m src.agents.node_agent --node-id <your-node-id>
-```
-
----
-
-## 六、技术栈
-
-| 组件 | 技术 |
-|------|------|
-| API | FastAPI |
-| 数据库 | SQLite (MVP) → PostgreSQL (1.0) |
-| ORM | SQLAlchemy |
-| 链 | Solana/Base (USDC) |
-| 节点通信 | WebSocket + HTTP Polling |
-| 验证 | SHA256 + ROUGE-L (简化) |
-| 测试 | pytest |
-
----
-
-## 七、测试结果
-
-| Sprint | 测试数 | 通过 | 覆盖率 |
-|--------|--------|------|--------|
-| Sprint 0 | 14 | 14 | 47% |
-| Sprint 1 | 15 | 15 | 65% |
-| Sprint 2 | 19 | 19 | 67% |
-| Sprint 3 | 14 | 14 | 62% |
-| **总计** | **62** | **62** | **62%** |
-
----
-
-## 八、启动命令
+### Cloudflare
 
 ```bash
-# 安装依赖
-pip install -r requirements.txt
+# 构建并推送
+docker build -t dcm-api .
+docker tag dcm-api ghcr.io/your-username/dcm-api:latest
+docker push ghcr.io/your-username/dcm-api:latest
 
-# 初始化数据库
-python scripts/init_db.py
+# 部署
+cf deploy ghcr.io/your-username/dcm-api:latest
+```
 
-# 启动 Router 服务
-uvicorn src.main:app --reload
+详细文档: [docs/Cloudflare-Deployment.md](docs/Cloudflare-Deployment.md)
 
-# 启动 Node Agent（需要先注册节点）
-python -m src.agents.node_agent --node-id <node-id>
+---
 
-# 运行测试
+## 五、测试
+
+```bash
+# 运行所有测试
 pytest tests/ -v
 
-# 运行测试（带覆盖率）
+# 带覆盖率
 pytest tests/ --cov=src --cov-report=html
+
+# 只运行单元测试
+pytest tests/unit/ -v
 ```
 
 ---
 
-## 九、下一步
+## 六、目录结构
 
-1. **Sprint 4**: 链上 Escrow/Stake 合约
-2. **Sprint 5**: 集成测试 + 部署
+```
+DCM/
+├── src/
+│   ├── api/           # API 路由
+│   ├── core/          # 核心逻辑 (wallet)
+│   ├── services/      # 业务服务
+│   ├── models/        # 数据模型
+│   └── agents/        # Node Agent SDK
+├── tests/             # 测试
+├── docs/              # 文档
+├── scripts/           # 脚本
+├── .cloudflare/       # Cloudflare 配置
+├── Dockerfile
+├── docker-compose.yml
+└── requirements.txt
+```
+
+---
+
+## 七、下一步
+
+1. **Sprint 5**: 集成测试 + 部署
+2. **链上集成**: 替换 Mock Wallet 为真实合约
