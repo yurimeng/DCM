@@ -113,3 +113,4 @@ contracts/node_modules/
 # Scripts
 scripts/cloud*
 
+!Dockerfile
