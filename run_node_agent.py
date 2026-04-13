@@ -302,14 +302,20 @@ class NodeAgent:
                     
                     # 获取实际使用的模型（通用任务由系统分配）
                     used_model = job.get("used_model") or self.model
-                    logger.info(f"📥 收到 Job: {job_id[:8]}... (model: {used_model})")
                     
-                    # 使用分配的模型调用 Ollama
-                    response, latency, tokens = self.call_ollama("你好", model=used_model)
+                    # 获取 prompt
+                    prompt = job.get("prompt") or job.get("messages", [{}])[0].get("content", "Hello")
+                    
+                    logger.info(f"📥 收到 Job: {job_id[:8]}... (model: {used_model}, prompt: {prompt[:30]}...)")
+                    
+                    # 使用 Job 的 prompt 调用 Ollama
+                    response, latency, tokens = self.call_ollama(prompt, model=used_model)
                     
                     if response:
                         logger.info(f"⚙️ 推理完成: {latency}ms, {tokens} tokens")
                         self.submit_result(job_id, response[:500], latency, tokens)
+                    else:
+                        logger.error(f"推理失败: {job_id[:8]}...")
                 
                 time.sleep(self.poll_interval)
                 

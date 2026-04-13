@@ -63,6 +63,14 @@ class JobCreate(BaseModel):
     bid_price: float = Field(..., gt=0, description="报价（USDC/1M tokens）")
     callback_url: Optional[str] = Field(None, description="异步回调 URL（可选）")
     region: Optional[str] = Field(None, description="区域偏好")
+    prompt: Optional[str] = Field(None, description="自然语言提示词")
+    
+    @field_validator("model_requirement")
+    @classmethod
+    def validate_model(cls, v: str) -> Optional[str]:
+        if v is None:
+            return None
+        return v
     
     @field_validator("model_requirement")
     @classmethod
