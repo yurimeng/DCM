@@ -92,7 +92,7 @@ class MatchingService:
         执行撮合逻辑
         
         撮合条件（全部满足）:
-        - job.bid_price >= node.ask_price
+        - job.bid_price <= node.ask_price
         - node.avg_latency <= job.max_latency
         - node.status == "online"
         - node.model_support contains job.model
@@ -116,7 +116,7 @@ class MatchingService:
     def _can_match(self, job: Job, node: Node) -> bool:
         """检查是否可以撮合"""
         return (
-            job.bid_price >= node.ask_price
+            job.bid_price <= node.ask_price
             and node.avg_latency <= job.max_latency
             and node.status == NodeStatus.ONLINE
             and job.model in node.model_support
