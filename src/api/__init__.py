@@ -13,6 +13,7 @@ from .quic import router as quic_router
 from .relay import router as relay_router
 from .core import router as core_router
 from .scaler import router as scaler_router
+from .worker_pool import router as worker_pool_router
 
 __all__ = [
     "jobs_router",
@@ -25,4 +26,5 @@ __all__ = [
     "relay_router",
     "core_router",
     "scaler_router",
+    "worker_pool_router",
 ]
