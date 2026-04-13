@@ -203,17 +203,50 @@ async def poll_job(
         job_repo = JobRepository(db)
         db_job = job_repo.get(match.job_id)
         
+        # 获取 prompt
+        prompt = db_job.prompt if db_job and db_job.prompt else "Hello"
+        
+        # 获取 generation 参数
+        max_tokens = db_job.output_tokens_limit if db_job else 100
+        
+        # 构建完整的 invoke 结构 (OpenAI 兼容)
+        model_info = {
+            "name": match.model,
+            "family": match.model.split(":")[0] if ":" in match.model else match.model,
+            "context_window": 32768
+        }
+        
+        invoke_input = {
+            "type": "chat_completion",
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            "prompt_raw": None
+        }
+        
+        generation = {
+            "max_tokens": max_tokens,
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "stream": False
+        }
+        
+        runtime = {
+            "backend": "ollama",
+            "api_style": "openai"
+        }
+        
         return NodePollResponse(
             has_job=True,
-            used_model=match.model,  # 实际使用的模型
-            job={
-                "job_id": match.job_id,
-                "model": db_job.model_requirement if db_job else match.model,
-                "input_tokens": db_job.input_tokens if db_job else 0,
-                "output_tokens_limit": db_job.output_tokens_limit if db_job else 0,
-                "max_latency": db_job.max_latency if db_job else 0,
-                "locked_price": match.locked_price,
-            }
+            execution_id=f"exec_{match.match_id}",
+            job_id=match.job_id,
+            slot_id=match.slot_id,
+            model=model_info,
+            input=invoke_input,
+            generation=generation,
+            runtime=runtime,
+            locked_price=match.locked_price,
         )
     
     return NodePollResponse(has_job=False)

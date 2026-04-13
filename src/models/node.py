@@ -149,13 +149,34 @@ class NodeResultSubmit(BaseModel):
 
 
 class NodePollResponse(BaseModel):
-    """Node 轮询响应"""
+    """Node 轮询响应 - 完整的 invoke 结构"""
     has_job: bool
+    execution_id: Optional[str] = None  # 执行ID
     job_id: Optional[str] = None
-    match_id: Optional[str] = None
-    model: Optional[str] = None
-    input_tokens: Optional[int] = None
-    output_tokens_limit: Optional[int] = None
-    max_latency: Optional[int] = None
+    slot_id: Optional[str] = None
+    
+    model: Optional[dict] = None  # {"name": "qwen3-8b", "family": "qwen", "context_window": 32768}
+    
+    input: Optional[dict] = None  # OpenAI 格式的 input
+    # {
+    #     "type": "chat_completion",
+    #     "messages": [...],
+    #     "prompt_raw": null
+    # }
+    
+    generation: Optional[dict] = None  # 生成参数
+    # {
+    #     "max_tokens": 512,
+    #     "temperature": 0.7,
+    #     "top_p": 0.9,
+    #     "stream": false
+    # }
+    
+    runtime: Optional[dict] = None  # 运行时信息
+    # {
+    #     "backend": "ollama",
+    #     "api_style": "openai"
+    # }
+    
     locked_price: Optional[float] = None
     message: Optional[str] = None

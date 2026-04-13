@@ -36,6 +36,7 @@ class JobRepository:
             max_latency=job.max_latency,
             bid_price=job.bid_price,
             callback_url=job.callback_url,
+            prompt=job.prompt,
             status=JobStatusDB[job.status.name.upper()],
             retry_count=job.retry_count,
             max_retries=job.max_retries,

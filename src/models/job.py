@@ -64,20 +64,6 @@ class JobCreate(BaseModel):
     callback_url: Optional[str] = Field(None, description="异步回调 URL（可选）")
     region: Optional[str] = Field(None, description="区域偏好")
     prompt: Optional[str] = Field(None, description="自然语言提示词")
-    
-    @field_validator("model_requirement")
-    @classmethod
-    def validate_model(cls, v: str) -> Optional[str]:
-        if v is None:
-            return None
-        return v
-    
-    @field_validator("model_requirement")
-    @classmethod
-    def validate_model(cls, v: str) -> Optional[str]:
-        if v is None:
-            return None
-        return v
 
 
 class Job(JobCreate):
@@ -117,6 +103,11 @@ class Job(JobCreate):
     # 重试
     retry_count: int = Field(default=0)
     max_retries: int = 2
+    
+    # Invoke 结构 (OpenAI 兼容)
+    execution_id: Optional[str] = Field(None, description="执行ID")
+    generation_params: Optional[dict] = Field(None, description="生成参数")
+    runtime_info: Optional[dict] = Field(None, description="运行时信息")
     
     def is_terminal(self) -> bool:
         """是否终止状态"""

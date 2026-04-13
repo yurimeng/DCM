@@ -52,6 +52,7 @@ class JobDB(Base):
     max_latency = Column(Integer, nullable=False)
     bid_price = Column(Float, nullable=False)
     callback_url = Column(String(500), nullable=True)
+    prompt = Column(Text, nullable=True)
     
     status = Column(SQLEnum(JobStatusDB), default=JobStatusDB.PENDING)
     created_at = Column(DateTime, default=datetime.utcnow)
