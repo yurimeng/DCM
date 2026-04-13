@@ -576,10 +576,13 @@ async def node_heartbeat(
     # 获取 Pre-lock Jobs
     pre_lock_jobs = []
     try:
-        # 查找该节点相关的 Pre-lock Job
-        job_repo = JobRepository(db)
-        pre_locked_jobs = db.query(JobDB).filter(
-            JobDB.node_id == node_id,
+        # 通过 Match 表查找该节点的 Pre-lock Jobs
+        from ..models.db_models import MatchDB
+        
+        pre_locked_jobs = db.query(JobDB).join(
+            MatchDB, JobDB.job_id == MatchDB.job_id
+        ).filter(
+            MatchDB.node_id == node_id,
             JobDB.status == JobStatusDB.PRE_LOCKED
         ).all()
         
