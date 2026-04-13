@@ -446,10 +446,35 @@ async def node_heartbeat(
         matching_service.register_node(node)
         matching_service.update_node_status(node_id, NodeStatus.ONLINE)
     
+    # 检查节点是否在 matching_service 中
+    re_register = False
+    if node_id not in matching_service._online_nodes:
+        # 节点不在内存中，尝试重新注册
+        if db_node.status == NodeStatusDB.ONLINE:
+            from ..models import Node
+            node = Node(
+                node_id=db_node.node_id,
+                gpu_type=db_node.gpu_type,
+                vram_gb=db_node.vram_gb,
+                model_support=json.loads(db_node.model_support) if db_node.model_support else [],
+                ask_price=float(db_node.ask_price),
+                avg_latency=int(db_node.avg_latency),
+                region=db_node.region,
+            )
+            try:
+                matching_service.register_node(node)
+                matching_service.update_node_status(node_id, NodeStatus.ONLINE)
+            except:
+                re_register = True
+        else:
+            re_register = True
+    
     return {
         "node_id": node_id,
         "status": heartbeat_data.get("status", "idle"),
         "timestamp": int(datetime.utcnow().timestamp() * 1000),
+        "matched": node_id in matching_service._online_nodes,
+        "re_register": re_register,
     }
 
 
