@@ -1,0 +1,21 @@
+# Render Blueprint
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: dcm-api
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn src.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /internal/v1/health
+    envVars:
+      - key: DCM_MVP_MODE
+        value: "true"
+      - key: USE_BLOCKCHAIN
+        value: "false"
+      - key: DCM_DATABASE_URL
+        value: sqlite:///./dcm.db
+      - key: PYTHON_VERSION
+        value: "3.11"

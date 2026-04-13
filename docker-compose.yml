@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  dcm-api:
+    build: .
+    container_name: dcm-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DCM_MVP_MODE=true
+      - USE_BLOCKCHAIN=false
+      - DCM_DATABASE_URL=sqlite:///./dcm.db
+    volumes:
+      - ./data:/app/data
+      - ./dcm.db:/app/dcm.db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 可选: Ollama 服务 (本地开发)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    # GPU 支持 (需要 nvidia-container-toolkit)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+volumes:
+  ollama-data:
