@@ -156,6 +156,13 @@ class NodeAgent:
                 timeout=5
             )
             
+            if resp.status_code == 404:
+                # 节点不存在，重新注册
+                logger.warning(f"节点 {self.node_id} 不存在，重新注册")
+                if self.register_new_node():
+                    self.ensure_online()
+                return None
+            
             if resp.status_code == 200:
                 result = resp.json()
                 
@@ -171,13 +178,22 @@ class NodeAgent:
                 
                 return result
             return None
-        except:
+        except Exception as e:
+            logger.error(f"心跳失败: {e}")
             return None
     
     def poll_job(self):
         """轮询 Job"""
         try:
             resp = requests.post(f"{self.dcm_url}/api/v1/nodes/{self.node_id}/poll", timeout=10)
+            
+            if resp.status_code == 404:
+                # 节点不存在，重新注册
+                logger.warning(f"节点 {self.node_id} 不存在，重新注册")
+                if self.register_new_node():
+                    self.ensure_online()
+                return None
+            
             resp.raise_for_status()
             result = resp.json()
             return result.get("job") if result.get("has_job") else None
