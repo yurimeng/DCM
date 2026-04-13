@@ -9,7 +9,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制代码
 COPY src/ src/
 COPY config.py .
-COPY main.py .
 
 # 创建数据目录
 RUN mkdir -p /app/data
@@ -18,4 +17,4 @@ RUN mkdir -p /app/data
 EXPOSE 8000
 
 # 启动命令
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
