@@ -259,3 +259,15 @@ async def get_job_stats(db: Session = Depends(get_db)):
 
 
 
+
+
+@router.get("/debug/routes")
+async def debug_routes():
+    """调试端点：列出所有 jobs 路由"""
+    routes = []
+    for route in jobs_router.routes:
+        routes.append({
+            "path": route.path,
+            "methods": list(route.methods) if hasattr(route, 'methods') else ['GET']
+        })
+    return {"routes": routes}
