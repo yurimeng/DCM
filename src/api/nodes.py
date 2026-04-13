@@ -343,6 +343,7 @@ async def submit_result(
     )
     
     # 自动触发结算
+    settlement_result = None
     try:
         escrow_repo = EscrowRepository(db)
         db_escrow = escrow_repo.get_by_job(job_id)
@@ -372,9 +373,12 @@ async def submit_result(
             job_repo.update(job_id, final_price=actual_cost)
             
             db.commit()
+            settlement_result = {"cost": actual_cost, "node_earn": node_earn, "platform_fee": platform_fee}
             logger.info(f"✅ 自动结算完成: job={job_id}, cost={actual_cost}, node_earn={node_earn}")
     except Exception as e:
         logger.error(f"结算失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
     
     response = {
         "received": True,
