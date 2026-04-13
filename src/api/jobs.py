@@ -242,19 +242,28 @@ async def prelock_job(
     
     # Pre-lock TTL: 30 秒
     PRELOCK_TTL_SECONDS = 30
+    now = datetime.utcnow()
+    expires_at = now + timedelta(seconds=PRELOCK_TTL_SECONDS)
     
-    # 更新 Job 状态
+    # 更新 Job 状态 (数据库)
     db_job.status = JobStatusDB.PRE_LOCKED
-    db_job.pre_locked_at = datetime.utcnow()
-    db_job.pre_lock_expires_at = datetime.utcnow() + timedelta(seconds=PRELOCK_TTL_SECONDS)
+    db_job.pre_locked_at = now
+    db_job.pre_lock_expires_at = expires_at
+    
+    # 更新内存服务的 Job 状态
+    memory_job = matching_service._pending_jobs.get(job_id)
+    if memory_job:
+        memory_job.status = JobStatus.PRE_LOCKED
+        memory_job.pre_locked_at = now
+        memory_job.pre_lock_expires_at = expires_at
     
     db.commit()
     
     return {
         "job_id": job_id,
         "status": "pre_locked",
-        "pre_locked_at": db_job.pre_locked_at.isoformat(),
-        "pre_lock_expires_at": db_job.pre_lock_expires_at.isoformat(),
+        "pre_locked_at": now.isoformat(),
+        "pre_lock_expires_at": expires_at.isoformat(),
         "ttl_seconds": PRELOCK_TTL_SECONDS,
     }
 
@@ -291,6 +300,14 @@ async def prelock_ack(
         db_job.status = JobStatusDB.MATCHED
         db_job.pre_locked_at = None
         db_job.pre_lock_expires_at = None
+        
+        # 更新内存服务
+        memory_job = matching_service._pending_jobs.get(job_id)
+        if memory_job:
+            memory_job.status = JobStatus.MATCHED
+            memory_job.pre_locked_at = None
+            memory_job.pre_lock_expires_at = None
+        
         db.commit()
         
         return {
@@ -303,6 +320,13 @@ async def prelock_ack(
     db_job.status = JobStatusDB.RESERVED
     db_job.pre_locked_at = None
     db_job.pre_lock_expires_at = None
+    
+    # 更新内存服务
+    memory_job = matching_service._pending_jobs.get(job_id)
+    if memory_job:
+        memory_job.status = JobStatus.RESERVED
+        memory_job.pre_locked_at = None
+        memory_job.pre_lock_expires_at = None
     
     db.commit()
     
@@ -342,6 +366,13 @@ async def release_prelock(
     db_job.pre_locked_at = None
     db_job.pre_lock_expires_at = None
     
+    # 更新内存服务
+    memory_job = matching_service._pending_jobs.get(job_id)
+    if memory_job:
+        memory_job.status = JobStatus.MATCHED
+        memory_job.pre_locked_at = None
+        memory_job.pre_lock_expires_at = None
+    
     db.commit()
     
     return {
@@ -374,6 +405,14 @@ async def cleanup_expired_prelocks(
         job.status = JobStatusDB.MATCHED
         job.pre_locked_at = None
         job.pre_lock_expires_at = None
+        
+        # 更新内存服务
+        memory_job = matching_service._pending_jobs.get(job.job_id)
+        if memory_job:
+            memory_job.status = JobStatus.MATCHED
+            memory_job.pre_locked_at = None
+            memory_job.pre_lock_expires_at = None
+        
         released_count += 1
     
     db.commit()
