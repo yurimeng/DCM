@@ -208,6 +208,176 @@ async def reconciliation_status(db: Session = Depends(get_db)):
     }
 
 
+@router.post("/{job_id}/prelock")
+async def prelock_job(
+    job_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Pre-lock Job (DCM v3.1)
+    
+    触发 Job 的 Pre-lock 状态，设置过期时间
+    Node Agent 收到 Pre-lock 后需要在 TTL 内发送 ACK
+    """
+    from datetime import datetime, timedelta
+    
+    job_repo = JobRepository(db)
+    db_job = job_repo.get(job_id)
+    
+    if not db_job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # 检查状态 (只有 MATCHED 状态可以 Pre-lock)
+    if db_job.status != JobStatusDB.MATCHED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot prelock job in status: {db_job.status}"
+        )
+    
+    # Pre-lock TTL: 30 秒
+    PRELOCK_TTL_SECONDS = 30
+    
+    # 更新 Job 状态
+    db_job.status = JobStatusDB.PRE_LOCKED
+    db_job.pre_locked_at = datetime.utcnow()
+    db_job.pre_lock_expires_at = datetime.utcnow() + timedelta(seconds=PRELOCK_TTL_SECONDS)
+    
+    db.commit()
+    
+    return {
+        "job_id": job_id,
+        "status": "pre_locked",
+        "pre_locked_at": db_job.pre_locked_at.isoformat(),
+        "pre_lock_expires_at": db_job.pre_lock_expires_at.isoformat(),
+        "ttl_seconds": PRELOCK_TTL_SECONDS,
+    }
+
+
+@router.post("/{job_id}/prelock/ack")
+async def prelock_ack(
+    job_id: str,
+    node_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Pre-lock ACK (DCM v3.1)
+    
+    Node Agent 确认 Pre-lock，Job 状态变为 RESERVED
+    """
+    from datetime import datetime
+    
+    job_repo = JobRepository(db)
+    db_job = job_repo.get(job_id)
+    
+    if not db_job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # 检查状态
+    if db_job.status != JobStatusDB.PRE_LOCKED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job not in pre_locked status: {db_job.status}"
+        )
+    
+    # 检查是否过期
+    if db_job.pre_lock_expires_at and datetime.utcnow() > db_job.pre_lock_expires_at:
+        # 已过期，释放 Pre-lock
+        db_job.status = JobStatusDB.MATCHED
+        db_job.pre_locked_at = None
+        db_job.pre_lock_expires_at = None
+        db.commit()
+        
+        return {
+            "job_id": job_id,
+            "status": "expired",
+            "message": "Pre-lock expired, job returned to matched"
+        }
+    
+    # 确认 Pre-lock
+    db_job.status = JobStatusDB.RESERVED
+    db_job.pre_locked_at = None
+    db_job.pre_lock_expires_at = None
+    
+    db.commit()
+    
+    return {
+        "job_id": job_id,
+        "status": "reserved",
+        "message": "Pre-lock confirmed, job reserved"
+    }
+
+
+@router.post("/{job_id}/prelock/release")
+async def release_prelock(
+    job_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    释放 Pre-lock (DCM v3.1)
+    
+    将 Job 状态从 PRE_LOCKED 恢复到 MATCHED
+    """
+    from datetime import datetime
+    
+    job_repo = JobRepository(db)
+    db_job = job_repo.get(job_id)
+    
+    if not db_job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if db_job.status != JobStatusDB.PRE_LOCKED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job not in pre_locked status: {db_job.status}"
+        )
+    
+    # 释放 Pre-lock
+    db_job.status = JobStatusDB.MATCHED
+    db_job.pre_locked_at = None
+    db_job.pre_lock_expires_at = None
+    
+    db.commit()
+    
+    return {
+        "job_id": job_id,
+        "status": "matched",
+        "message": "Pre-lock released, job returned to matched"
+    }
+
+
+@router.post("/prelock/cleanup")
+async def cleanup_expired_prelocks(
+    db: Session = Depends(get_db)
+):
+    """
+    清理过期的 Pre-lock (DCM v3.1)
+    
+    将所有超时的 PRE_LOCKED Job 状态恢复到 MATCHED
+    由定时任务调用
+    """
+    from datetime import datetime
+    
+    # 查找所有过期的 Pre-lock
+    expired_jobs = db.query(JobDB).filter(
+        JobDB.status == JobStatusDB.PRE_LOCKED,
+        JobDB.pre_lock_expires_at < datetime.utcnow()
+    ).all()
+    
+    released_count = 0
+    for job in expired_jobs:
+        job.status = JobStatusDB.MATCHED
+        job.pre_locked_at = None
+        job.pre_lock_expires_at = None
+        released_count += 1
+    
+    db.commit()
+    
+    return {
+        "released_count": released_count,
+        "message": f"Released {released_count} expired pre-locks"
+    }
+
+
 @router.get("")
 async def list_jobs(
     status: Optional[str] = None,

@@ -292,6 +292,15 @@ class DCMNodeAgent:
                 # 更新网络状态
                 self.network.current_state = NetworkState.ONLINE
                 
+                # 处理 Pre-lock Jobs (发送 ACK)
+                for job in pre_lock_jobs:
+                    job_id = job.get("job_id")
+                    expires_at = job.get("pre_lock_expires_at")
+                    if job_id and self._prelock_ack(job_id):
+                        logger.info(f"📌 Pre-lock ACK 成功: {job_id[:12]}...")
+                    else:
+                        logger.warning(f"📌 Pre-lock ACK 失败: {job_id[:12]}...")
+                
                 # 记录心跳数据 (每 3 次心跳记录一次，约 90 秒)
                 self._heartbeat_count = getattr(self, '_heartbeat_count', 0) + 1
                 if self._heartbeat_count % 3 == 0:
@@ -309,6 +318,30 @@ class DCMNodeAgent:
 
         except Exception as e:
             logger.error(f"心跳异常: {e}")
+            return False
+
+    def _prelock_ack(self, job_id: str) -> bool:
+        """发送 Pre-lock ACK"""
+        try:
+            resp = requests.post(
+                f"{self.config.dcm_url}/api/v1/jobs/{job_id}/prelock/ack",
+                json={"node_id": self.config.node_id},
+                timeout=10
+            )
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("status") == "reserved":
+                    return True
+                else:
+                    # 已过期
+                    logger.warning(f"Pre-lock 已过期: {job_id[:12]}...")
+                    return False
+            else:
+                return False
+                
+        except Exception as e:
+            logger.error(f"Pre-lock ACK 异常: {e}")
             return False
 
     # ==================== Job 处理 ====================
@@ -368,11 +401,43 @@ class DCMNodeAgent:
             if not result.get("has_job"):
                 return None
 
+            job_id = result.get("job_id")
+            
+            # Pre-lock 流程: 在获取 Job 前先触发 Pre-lock
+            if job_id and self._prelock_job(job_id):
+                logger.info(f"📌 Pre-lock 触发成功: {job_id[:12]}...")
+            
             # 构建 Invoke
             invoke = Invoke(result)
             invoke.network_type = NetworkType.HTTPS
 
             return invoke
+
+        except Exception as e:
+            logger.error(f"HTTPS 轮询异常: {e}")
+            return None
+
+    def _prelock_job(self, job_id: str) -> bool:
+        """触发 Job 的 Pre-lock"""
+        try:
+            resp = requests.post(
+                f"{self.config.dcm_url}/api/v1/jobs/{job_id}/prelock",
+                timeout=10
+            )
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                ttl = data.get("ttl_seconds", 30)
+                logger.info(f"📌 Pre-lock: job={job_id[:12]}..., ttl={ttl}s, expires={data.get('pre_lock_expires_at', 'N/A')}")
+                return True
+            else:
+                # Job 可能已经不是 MATCHED 状态
+                logger.warning(f"Pre-lock 触发失败: {resp.status_code}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Pre-lock 触发异常: {e}")
+            return False
 
         except Exception as e:
             logger.error(f"HTTPS 轮询异常: {e}")
