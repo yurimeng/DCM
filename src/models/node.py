@@ -26,6 +26,7 @@ class NodeTier(str, Enum):
 
 
 class NodeCreate(BaseModel):
+    node_id: Optional[str] = Field(None, description="节点 ID（可选，不提供则自动生成）")
     """Node 创建请求"""
     gpu_type: str = Field(..., description="GPU 类型（如 RTX4090, A100）")
     vram_gb: int = Field(..., gt=0, description="VRAM 大小（GB）")

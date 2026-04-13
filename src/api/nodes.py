@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from datetime import datetime
+import uuid
 
 from ..database import get_db
 from ..models import Node, NodeCreate, NodeResponse, NodeStatus, NodePollResponse, NodeResultSubmit
@@ -36,7 +37,12 @@ async def register_node(
     返回所需的 Stake 门槛
     """
     # 1. 创建 Node Pydantic 模型
-    node = Node(**node_create.model_dump())
+    # 使用提供的 node_id 或生成新的
+    node_data = node_create.model_dump()
+    if not node_data.get('node_id'):
+        node_data['node_id'] = str(uuid.uuid4())
+    
+    node = Node(**node_data)
     
     # 2. 保存到数据库
     node_repo = NodeRepository(db)
