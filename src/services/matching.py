@@ -102,6 +102,25 @@ class MatchingService:
         match_id = self._job_to_match.get(job_id)
         return self._matches.get(match_id) if match_id else None
     
+    def get_node_prelock_jobs(self, node_id: str) -> List[Job]:
+        """
+        获取节点的 Pre-lock Jobs
+        
+        通过 node_id 查找对应的 Match，再获取 Match 的 Job
+        """
+        prelock_jobs = []
+        
+        # 遍历所有 matches，找到该节点匹配的 jobs
+        for match_id, match in self._matches.items():
+            if match.node_id == node_id:
+                job_id = match.job_id
+                # 在 pending_jobs 中查找
+                job = self._pending_jobs.get(job_id)
+                if job and job.status == JobStatus.PRE_LOCKED:
+                    prelock_jobs.append(job)
+        
+        return prelock_jobs
+    
     def _match(self, job: Job) -> Optional[Match]:
         """
         执行撮合逻辑

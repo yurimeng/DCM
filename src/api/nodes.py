@@ -573,26 +573,22 @@ async def node_heartbeat(
         else:
             re_register = True
     
-    # 获取 Pre-lock Jobs
+    # 获取 Pre-lock Jobs (通过内存服务)
     pre_lock_jobs = []
     try:
-        # 通过 Match 表查找该节点的 Pre-lock Jobs
-        from ..models.db_models import MatchDB
+        # 通过内存服务获取 Pre-lock Jobs
+        prelocked_jobs = matching_service.get_node_prelock_jobs(node_id)
         
-        pre_locked_jobs = db.query(JobDB).join(
-            MatchDB, JobDB.job_id == MatchDB.job_id
-        ).filter(
-            MatchDB.node_id == node_id,
-            JobDB.status == JobStatusDB.PRE_LOCKED
-        ).all()
-        
-        for job in pre_locked_jobs:
+        for job in prelocked_jobs:
             pre_lock_jobs.append({
                 "job_id": job.job_id,
                 "prompt": job.prompt,
                 "model": job.model,
                 "pre_lock_expires_at": job.pre_lock_expires_at.isoformat() if job.pre_lock_expires_at else None,
             })
+        
+        if pre_lock_jobs:
+            logger.info(f"节点 {node_id} 有 {len(pre_lock_jobs)} 个 Pre-lock Jobs")
     except Exception as e:
         logger.warning(f"获取 Pre-lock Jobs 失败: {e}")
     
