@@ -10,6 +10,9 @@ from datetime import datetime
 import json
 import base64
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 from ..database import get_db
 from ..models import Node, NodeCreate, NodeResponse, NodeStatus, NodePollResponse, NodeResultSubmit
