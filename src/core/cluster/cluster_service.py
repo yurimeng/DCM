@@ -24,6 +24,10 @@ class CoreClusterService:
     2. DNS 路由选择
     3. 健康检测与故障转移
     4. P2P 同步协调
+    
+    集成:
+    - P2PService: 节点间通信
+    - RelayService: Relay 节点管理
     """
     
     def __init__(self, config: ClusterConfig = None):
@@ -31,6 +35,9 @@ class CoreClusterService:
         self._nodes: Dict[str, CoreNode] = {}
         self._round_robin_index: Dict[str, int] = defaultdict(int)  # 按节点分组轮询
         self._lock = asyncio.Lock()
+        
+        # 本节点 ID (由启动时设置)
+        self._node_id: Optional[str] = None
         
         logger.info(f"CoreClusterService initialized with {len(self._nodes)} nodes")
     
