@@ -127,14 +127,14 @@ async def node_online(
     from ..models import Node
     import json
     node_model = Node(
+        node_id=node_id,
         gpu_type=db_node.gpu_type,
         vram_gb=db_node.vram_gb,
-        model_support=json.loads(db_node.model_support),
+        model_support=json.loads(db_node.model_support) if db_node.model_support else [],
         ask_price=float(db_node.ask_price),
         avg_latency=int(db_node.avg_latency),
         region=db_node.region,
     )
-    node_model.node_id = node_id
     node_model.status = NodeStatus.ONLINE
     matching_service.register_node(node_model)
     

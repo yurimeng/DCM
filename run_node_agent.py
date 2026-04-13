@@ -121,15 +121,21 @@ class NodeAgent:
             status = data.get("status")
             
             if status in ("offline", "active"):
-                # 充值
+                # 充值（如果需要）
                 stake_required = data.get("stake_required", 200)
-                if data.get("stake_amount", 0) < stake_required:
-                    requests.post(
-                        f"{self.dcm_url}/api/v1/nodes/{self.node_id}/stake/deposit",
-                        json={"amount": stake_required},
-                        timeout=10
-                    )
-                    logger.info(f"Stake 充值成功: {stake_required}")
+                if data.get("stake_amount", 0) < stake_required or stake_required == 0:
+                    try:
+                        requests.post(
+                            f"{self.dcm_url}/api/v1/nodes/{self.node_id}/stake/deposit",
+                            json={"amount": stake_required or 200},
+                            timeout=10
+                        )
+                        logger.info(f"Stake 充值成功: {stake_required or 200}")
+                    except Exception as e:
+                        if "already deposited" in str(e):
+                            logger.info("Stake 已存在，跳过")
+                        else:
+                            raise
                 
                 # 上线
                 resp = requests.post(f"{self.dcm_url}/api/v1/nodes/{self.node_id}/online", timeout=10)
