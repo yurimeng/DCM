@@ -22,8 +22,8 @@ COPY --from=builder /app/config.py .
 # 创建数据目录
 RUN mkdir -p /app/data
 
-# 暴露端口
-EXPOSE 8000
+# 暴露端口 (Render 会覆盖)
+EXPOSE 10000
 
-# 启动命令
+# 启动命令 - 使用 PORT 环境变量
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
