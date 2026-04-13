@@ -116,6 +116,7 @@ async def debug_db_status(db: Session = Depends(get_db)):
         "nodes": db.query(NodeDB).count(),
     }
 
+@router.get("/{job_id}")
 async def get_job(
     job_id: str,
     db: Session = Depends(get_db)
