@@ -91,7 +91,6 @@ contracts/deployments/
 
 # npm/pip packages
 *.txt
-requirements.txt
 
 # Coverage reports
 .coverage
