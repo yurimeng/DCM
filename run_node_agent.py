@@ -186,7 +186,7 @@ class NodeAgent:
             return None
     
     def poll_job(self):
-        """轮询 Job"""
+        """轮询 Job - 返回完整的 invoke 结构"""
         try:
             resp = requests.post(f"{self.dcm_url}/api/v1/nodes/{self.node_id}/poll", timeout=10)
             
@@ -200,15 +200,20 @@ class NodeAgent:
             resp.raise_for_status()
             result = resp.json()
             
-            job = result.get("job")
-            if job:
-                # 从 Match 获取实际使用的模型
-                used_model = result.get("used_model")
-                if used_model:
-                    job["used_model"] = used_model
-                    logger.info(f"通用任务，使用模型: {used_model}")
+            if result.get("has_job"):
+                # 返回完整的 invoke 结构
+                return {
+                    "execution_id": result.get("execution_id"),
+                    "job_id": result.get("job_id"),
+                    "slot_id": result.get("slot_id"),
+                    "model": result.get("model", {}),
+                    "input": result.get("input", {}),
+                    "generation": result.get("generation", {}),
+                    "runtime": result.get("runtime", {}),
+                    "locked_price": result.get("locked_price"),
+                }
             
-            return job if result.get("has_job") else None
+            return None
         except:
             return None
     
@@ -295,21 +300,34 @@ class NodeAgent:
                     heartbeat_count = 0
                 
                 # 轮询 Job
-                job = self.poll_job()
-                if job and job["job_id"] not in processed_jobs:
-                    job_id = job["job_id"]
+                invoke = self.poll_job()
+                if invoke and invoke["job_id"] not in processed_jobs:
+                    job_id = invoke["job_id"]
+                    execution_id = invoke.get("execution_id")
                     processed_jobs.add(job_id)
                     
-                    # 获取实际使用的模型（通用任务由系统分配）
-                    used_model = job.get("used_model") or self.model
+                    # 从 invoke 结构中提取信息
+                    model_info = invoke.get("model", {})
+                    used_model = model_info.get("name", self.model)
                     
-                    # 获取 prompt
-                    prompt = job.get("prompt") or job.get("messages", [{}])[0].get("content", "Hello")
+                    # 从 input.messages 中提取 prompt
+                    input_data = invoke.get("input", {})
+                    messages = input_data.get("messages", [])
+                    prompt = None
+                    for msg in messages:
+                        if msg.get("role") == "user":
+                            prompt = msg.get("content", "Hello")
+                            break
+                    if not prompt:
+                        prompt = "Hello"
                     
-                    logger.info(f"📥 收到 Job: {job_id[:8]}... (model: {used_model}, prompt: {prompt[:30]}...)")
+                    generation = invoke.get("generation", {})
+                    max_tokens = generation.get("max_tokens", 100)
                     
-                    # 使用 Job 的 prompt 调用 Ollama
-                    response, latency, tokens = self.call_ollama(prompt, model=used_model)
+                    logger.info(f"📥 收到 Job: {job_id[:8]}... (exec: {execution_id[:8] if execution_id else 'N/A'}..., model: {used_model}, prompt: {prompt[:30]}...)")
+                    
+                    # 调用 Ollama 执行推理
+                    response, latency, tokens = self.call_ollama(prompt, model=used_model, max_tokens=max_tokens)
                     
                     if response:
                         logger.info(f"⚙️ 推理完成: {latency}ms, {tokens} tokens")
