@@ -17,6 +17,12 @@ from config import settings
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
+@router.get("/ping")
+async def ping():
+    """简单的 ping 测试"""
+    return {"pong": True, "router": "jobs"}
+
+
 def _safe_status(status) -> str:
     """安全获取状态值"""
     if hasattr(status, 'value'):
