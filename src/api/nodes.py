@@ -276,6 +276,9 @@ async def submit_result(
     if layer2_job_id:
         response["layer2_job_id"] = layer2_job_id
     
+
+    # 释放节点（允许节点接收新 Job）
+    matching_service.release_node(node_id)
     return response
 
 
