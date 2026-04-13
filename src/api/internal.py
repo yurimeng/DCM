@@ -668,3 +668,28 @@ async def get_verification_stats_endpoint():
         "total_violations": sum(verification_service._node_violations.values()),
         "by_node": verification_service._node_violations,
     }
+
+
+@router.get("/debug/db-status")
+async def debug_db_status(db: Session = Depends(get_db)):
+    """调试端点: 检查数据库状态"""
+    from src.models.db_models import JobDB, EscrowDB, MatchDB, NodeDB
+    
+    return {
+        "jobs": db.query(JobDB).count(),
+        "escrows": db.query(EscrowDB).count(),
+        "matches": db.query(MatchDB).count(),
+        "nodes": db.query(NodeDB).count(),
+        "recent_jobs": [
+            {"job_id": j.job_id, "status": j.status, "bid_price": j.bid_price}
+            for j in db.query(JobDB).order_by(JobDB.created_at.desc()).limit(3).all()
+        ],
+        "recent_escrows": [
+            {"escrow_id": e.escrow_id, "job_id": e.job_id, "match_id": e.match_id, "status": e.status}
+            for e in db.query(EscrowDB).order_by(EscrowDB.created_at.desc()).limit(3).all()
+        ],
+        "recent_matches": [
+            {"match_id": m.match_id, "job_id": m.job_id, "node_id": m.node_id}
+            for m in db.query(MatchDB).order_by(MatchDB.matched_at.desc()).limit(3).all()
+        ],
+    }
