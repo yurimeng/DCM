@@ -109,3 +109,7 @@ data/
 # Deep nested node_modules
 contracts/node_modules/
 
+
+# Scripts
+scripts/cloud*
+
