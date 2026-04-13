@@ -1,0 +1,15 @@
+# Node Agent 配置 - Render 部署
+router_host: dcm-api-p00a.onrender.com
+router_port: 443
+use_websocket: false
+poll_interval: 3
+reconnect_interval: 10
+
+ollama_host: localhost
+ollama_port: 11434
+ollama_model: qwen2.5:7b
+ollama_timeout: 120
+
+node_id: node-local-ollama-agent
+heartbeat_interval: 30
+max_concurrent_jobs: 1
