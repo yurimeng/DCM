@@ -92,7 +92,19 @@ async def create_job(
     )
 
 
-@router.get("/{job_id}")
+
+@router.get("/debug/db-status")
+async def debug_db_status(db: Session = Depends(get_db)):
+    """调试端点: 检查数据库状态"""
+    from ..models.db_models import JobDB, EscrowDB, MatchDB, NodeDB
+    
+    return {
+        "jobs": db.query(JobDB).count(),
+        "escrows": db.query(EscrowDB).count(),
+        "matches": db.query(MatchDB).count(),
+        "nodes": db.query(NodeDB).count(),
+    }
+
 async def get_job(
     job_id: str,
     db: Session = Depends(get_db)
