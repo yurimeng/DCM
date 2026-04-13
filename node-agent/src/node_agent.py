@@ -143,19 +143,15 @@ class DCMNodeAgent:
         """注册新节点"""
         try:
             resp = requests.post(
-                f"{self.config.dcm_url}/api/v1/nodes/register",
+                f"{self.config.dcm_url}/api/v1/nodes",
                 json={
-                    "model": self.config.model,
+                    "gpu_type": "Apple Silicon",
+                    "vram_gb": 36,
+                    "model_support": [self.config.model],
+                    "ask_price": 0.001,
+                    "avg_latency": 200,
+                    "region": "local",
                     "gpu_count": self.config.gpu_count,
-                    "slot_count": self.config.slot_count,
-                    "worker_count": self.config.worker_count,
-                    "stake_amount": self.config.stake_amount,
-                    # 网络能力
-                    "network_capabilities": {
-                        "https": True,
-                        "p2p": self.config.p2p_enabled,
-                        "relay": self.config.relay_enabled,
-                    }
                 },
                 timeout=30
             )
@@ -182,9 +178,37 @@ class DCMNodeAgent:
         
         # 检查节点是否存在
         if not self.check_node_exists():
-            return self.register_node()
+            if not self.register_node():
+                return False
+        
+        # 激活节点为 ONLINE
+        if not self.activate_online():
+            logger.warning("节点激活失败")
         
         return self.heartbeat()
+    
+    def activate_online(self) -> bool:
+        """激活节点为 ONLINE 状态"""
+        if not self.config.node_id:
+            return False
+        
+        try:
+            resp = requests.post(
+                f"{self.config.dcm_url}/api/v1/nodes/{self.config.node_id}/online",
+                timeout=10
+            )
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                logger.info(f"✅ 节点激活: {data.get('status', 'online')}")
+                return True
+            else:
+                logger.warning(f"激活失败: {resp.status_code}")
+                return False
+                
+        except Exception as e:
+            logger.warning(f"激活异常: {e}")
+            return False
     
     def heartbeat(self) -> bool:
         """发送心跳"""
@@ -194,6 +218,7 @@ class DCMNodeAgent:
         try:
             resp = requests.post(
                 f"{self.config.dcm_url}/api/v1/nodes/{self.config.node_id}/heartbeat",
+                json={"status": "idle"},
                 timeout=10
             )
             
