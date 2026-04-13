@@ -62,3 +62,50 @@ Thumbs.db
 
 # Coverage
 htmlcov/
+
+# ===== DCM Project Specific =====
+
+# Obsidian Vault - DO NOT upload
+# Process files, TODOs, and requirements should stay in Obsidian
+DCM/.obsidian-cli
+DCM/.checkpoint/
+DCM/TODO/
+DCM/status/
+
+# Cloud deployment configs (deprecated/moved to separate repos)
+.cloudrun/
+.cloudflare/
+.fly.toml
+render.yaml
+docker-compose.yml
+Dockerfile
+
+# Node packages (install via npm/pip)
+node_modules/
+package-lock.json
+
+# Hardhat artifacts (deploy locally, commit ABIs only if needed)
+contracts/cache/
+contracts/artifacts/
+contracts/deployments/
+
+# npm/pip packages
+*.txt
+requirements.txt
+
+# Coverage reports
+.coverage
+htmlcov/
+
+# Database (local only)
+dcm.db
+
+# Local data
+data/
+
+# GitHub Actions
+.github/
+
+# Deep nested node_modules
+contracts/node_modules/
+
