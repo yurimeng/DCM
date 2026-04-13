@@ -30,6 +30,8 @@ class NodeCreate(BaseModel):
     model_support: List[str] = Field(default=["qwen2.5:7b"], description="支持的模型列表")
     ask_price: float = Field(..., gt=0, description="报价（USDC/1M tokens）")
     avg_latency: int = Field(..., gt=0, description="历史平均延迟（ms）")
+    avg_success_rate: float = Field(default=0.95, ge=0, le=1, description="平均成功率 (0-1)")
+    avg_quality_score: float = Field(default=0.9, ge=0, le=1, description="平均质量评分 (0-1)")
     region: str = Field(..., description="地理区域")
     
     @field_validator("model_support")
@@ -51,6 +53,8 @@ class Node(BaseModel):
     model_support: List[str]
     ask_price: float
     avg_latency: int
+    avg_success_rate: float = 0.95
+    avg_quality_score: float = 0.9
     region: str
     
     # 状态（运行时）

@@ -37,6 +37,8 @@ NODE_CAPABILITY = {
     "vram_gb": 24,
     "ask_price": 0.002,
     "avg_latency": 100,
+    "avg_success_rate": 0.98,  # 98% 成功率
+    "avg_quality_score": 0.95,  # 95% 质量评分
     "region": "local"
 }
 

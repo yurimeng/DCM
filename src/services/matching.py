@@ -114,13 +114,43 @@ class MatchingService:
         return self._create_match(job, node)
     
     def _can_match(self, job: Job, node: Node) -> bool:
-        """检查是否可以撮合"""
-        return (
-            job.bid_price <= node.ask_price
-            and node.avg_latency <= job.max_latency
-            and node.status == NodeStatus.ONLINE
-            and job.model in node.model_support
-        )
+        """检查是否可以撮合
+        
+        匹配条件（必须全部满足）：
+        1. 模型匹配：job.model in node.model_support
+        2. 价格匹配：job.bid_price <= node.ask_price
+        3. 延迟匹配：node.avg_latency <= job.max_latency
+        4. 节点在线：node.status == NodeStatus.ONLINE
+        5. 成功率门槛：node.avg_success_rate >= job.min_success_rate (如果有)
+        6. 质量门槛：node.avg_quality_score >= job.min_quality_score (如果有)
+        """
+        # 1. 模型匹配（最关键，不匹配则直接拒绝）
+        if job.model not in node.model_support:
+            return False
+        
+        # 2. 价格匹配
+        if job.bid_price > node.ask_price:
+            return False
+        
+        # 3. 延迟匹配
+        if node.avg_latency > job.max_latency:
+            return False
+        
+        # 4. 节点状态
+        if node.status != NodeStatus.ONLINE:
+            return False
+        
+        # 5. 成功率检查（可选）
+        if hasattr(job, 'min_success_rate') and job.min_success_rate:
+            if node.avg_success_rate < job.min_success_rate:
+                return False
+        
+        # 6. 质量评分检查（可选）
+        if hasattr(job, 'min_quality_score') and job.min_quality_score:
+            if node.avg_quality_score < job.min_quality_score:
+                return False
+        
+        return True
     
     def _create_match(self, job: Job, node: Node) -> Match:
         """创建 Match"""
