@@ -205,10 +205,10 @@ async def poll_job(
         
         return NodePollResponse(
             has_job=True,
-            used_model=match.used_model,  # 实际使用的模型
+            used_model=match.model,  # 实际使用的模型
             job={
                 "job_id": match.job_id,
-                "model": db_job.model if db_job else match.used_model,
+                "model": db_job.model_requirement if db_job else match.model,
                 "input_tokens": db_job.input_tokens if db_job else 0,
                 "output_tokens_limit": db_job.output_tokens_limit if db_job else 0,
                 "max_latency": db_job.max_latency if db_job else 0,
