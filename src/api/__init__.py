@@ -12,6 +12,7 @@ from .p2p import router as p2p_router
 from .quic import router as quic_router
 from .relay import router as relay_router
 from .core import router as core_router
+from .scaler import router as scaler_router
 
 __all__ = [
     "jobs_router",
@@ -23,4 +24,5 @@ __all__ = [
     "quic_router",
     "relay_router",
     "core_router",
+    "scaler_router",
 ]

@@ -19,6 +19,7 @@ from .scaler_service import (
     ScalingMetrics,
     ScalingConfig,
     ScalingThresholds,
+    ScalingAction,
     WorkerInfo,
 )
 from .worker_pool import WorkerPoolService, worker_pool_service, Worker
@@ -42,5 +43,6 @@ __all__ = [
     "ScalingMetrics",
     "ScalingConfig",
     "ScalingThresholds",
+    "ScalingAction",
     "WorkerInfo",
 ]
