@@ -146,3 +146,16 @@ class NodeResultSubmit(BaseModel):
     result_hash: str = Field(..., description="结果 SHA256 哈希")
     actual_latency_ms: int = Field(..., ge=0)
     actual_output_tokens: int = Field(..., ge=0)
+
+
+class NodePollResponse(BaseModel):
+    """Node 轮询响应"""
+    has_job: bool
+    job_id: Optional[str] = None
+    match_id: Optional[str] = None
+    model: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens_limit: Optional[int] = None
+    max_latency: Optional[int] = None
+    locked_price: Optional[float] = None
+    message: Optional[str] = None

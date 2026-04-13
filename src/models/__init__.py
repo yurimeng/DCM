@@ -26,7 +26,7 @@ from .slot import (
 from .match import Match, MatchCreate, MatchResponse
 
 # Node models
-from .node import Node, NodeStatus, NodeCreate, NodeResponse
+from .node import Node, NodeStatus, NodeCreate, NodeResponse, NodePollResponse, NodeResultSubmit
 
 # Worker models
 from .worker import Worker, WorkerStatus, WorkerResponse
@@ -79,6 +79,8 @@ __all__ = [
     "NodeStatus",
     "NodeCreate",
     "NodeResponse",
+    "NodePollResponse",
+    "NodeResultSubmit",
     # Worker
     "Worker",
     "WorkerStatus",
