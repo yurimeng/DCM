@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from config import settings
-from .api import jobs_router, nodes_router, internal_router, disputes_router, wallet_router, p2p_router, quic_router
+from .api import jobs_router, nodes_router, internal_router, disputes_router, wallet_router, p2p_router, quic_router, relay_router
 from .database import init_db, SessionLocal
 
 
@@ -130,6 +130,7 @@ app.include_router(disputes_router)
 app.include_router(wallet_router)
 app.include_router(p2p_router, prefix=settings.api_prefix)
 app.include_router(quic_router, prefix=settings.api_prefix)
+app.include_router(relay_router, prefix=settings.api_prefix)
 
 
 @app.get("/")
