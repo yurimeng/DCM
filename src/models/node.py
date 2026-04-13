@@ -1,9 +1,10 @@
 """
-Node Models - F2: 节点注册与状态管理
+Node Models - DCM v3.0
+Node = Slot 集合 + 资源调度器
 """
 
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
 
@@ -33,11 +34,11 @@ class NodeCreate(BaseModel):
     avg_success_rate: float = Field(default=0.95, ge=0, le=1, description="平均成功率 (0-1)")
     avg_quality_score: float = Field(default=0.9, ge=0, le=1, description="平均质量评分 (0-1)")
     region: str = Field(..., description="地理区域")
+    gpu_count: int = Field(default=1, ge=1, description="GPU 数量")
     
     @field_validator("model_support")
     @classmethod
     def validate_model_support(cls, v: List[str]) -> List[str]:
-        # 支持 qwen2.5:7b
         allowed = ["qwen2.5:7b", "qwen3.5:latest", "gemma4:e4b", "llama3-8b"]
         for m in v:
             if m not in allowed:
@@ -46,18 +47,29 @@ class NodeCreate(BaseModel):
 
 
 class Node(BaseModel):
-    """Node 完整信息"""
+    """Node 资源容器
+    
+    Node = Slot 集合 + 资源调度器
+    包含多个 Slots 和 Workers
+    """
     node_id: str
+    
+    # 资源信息
     gpu_type: str
     vram_gb: int
-    model_support: List[str]
+    gpu_count: int = Field(default=1, ge=1, description="GPU 数量")
+    model_support: List[str] = []
     ask_price: float
     avg_latency: int
     avg_success_rate: float = 0.95
     avg_quality_score: float = 0.9
     region: str
     
-    # 状态（运行时）
+    # Slot 和 Worker 引用（实际数据在其他地方）
+    slot_ids: List[str] = Field(default_factory=list, description="Slot ID 列表")
+    worker_ids: List[str] = Field(default_factory=list, description="Worker ID 列表")
+    
+    # 状态
     status: NodeStatus = NodeStatus.OFFLINE
     stake_amount: float = 0.0
     stake_required: float = 0.0
@@ -66,17 +78,13 @@ class Node(BaseModel):
     # 元数据
     registered_at: Optional[datetime] = None
     last_heartbeat: Optional[datetime] = None
-    
-    # 预留扩展字段（JSON 格式）
-    # 未来可用于: 用户绑定、钱包地址、多个 Node_ID 等
     metadata: dict = Field(default_factory=dict)
     
     def get_stake_tier(self) -> NodeTier:
         """根据 GPU 数量确定等级"""
-        # 简化：VRAM < 32GB 为 personal，32-64GB 为 professional，> 64GB 为 enterprise
-        if self.vram_gb >= 64:
+        if self.gpu_count >= 8:
             return NodeTier.ENTERPRISE
-        elif self.vram_gb >= 32:
+        elif self.gpu_count >= 4:
             return NodeTier.PROFESSIONAL
         return NodeTier.PERSONAL
     
@@ -88,21 +96,42 @@ class Node(BaseModel):
         elif tier == NodeTier.PROFESSIONAL:
             return 500.0
         return 200.0
+    
+    def add_slot(self, slot_id: str) -> None:
+        """添加 Slot"""
+        if slot_id not in self.slot_ids:
+            self.slot_ids.append(slot_id)
+    
+    def remove_slot(self, slot_id: str) -> None:
+        """移除 Slot"""
+        if slot_id in self.slot_ids:
+            self.slot_ids.remove(slot_id)
+    
+    def add_worker(self, worker_id: str) -> None:
+        """添加 Worker"""
+        if worker_id not in self.worker_ids:
+            self.worker_ids.append(worker_id)
+    
+    def remove_worker(self, worker_id: str) -> None:
+        """移除 Worker"""
+        if worker_id in self.worker_ids:
+            self.worker_ids.remove(worker_id)
+    
+    def is_online(self) -> bool:
+        """检查是否在线"""
+        return self.status == NodeStatus.ONLINE
 
 
 class NodeResponse(BaseModel):
-    """Node 响应"""
+    """Node API 响应"""
     node_id: str
     status: NodeStatus
     stake_required: float
     stake_amount: float
+    gpu_count: int
+    slot_count: int
+    worker_count: int
     next_step: str
-
-
-class NodePollResponse(BaseModel):
-    """Node 拉取 Job 响应"""
-    has_job: bool
-    job: Optional[dict] = None
 
 
 class NodeHeartbeat(BaseModel):

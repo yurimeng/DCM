@@ -1,21 +1,18 @@
+"""
+F3 Match Engine 2.0 规范
+=======================
+
+> 版本: 3.1 (含 Pre-Lock 机制)
+> 状态: 已实现
+> 更新: 2026-04-13
+
 ---
-title: F3 Match Engine 2.0
-type: function
-module: Matching
-created: 2026-04-13
-updated: 2026-04-13
-status: draft
-priority: P0
-sprint: 8
----
 
-# F3 Match Engine 2.0
+## 一、概述
 
-## 概述
+Slot-based 计算交易所，支持层级模型兼容性匹配和 Multi-Job 并发执行。
 
-Slot-based 计算交易所，支持层级模型兼容性匹配。
-
-## 核心对象
+## 二、核心对象
 
 | 对象 | 描述 |
 |------|------|
@@ -23,8 +20,9 @@ Slot-based 计算交易所，支持层级模型兼容性匹配。
 | **Job** | 需求订单（Demand） |
 | **Node** | Slot 容器 |
 | **Worker** | 运行时执行器 |
+| **PreLock** | 资源预占机制 |
 
-## 架构
+## 三、架构
 
 ```
 Node
@@ -33,15 +31,16 @@ Node
            └─ Model
 ```
 
-## 功能清单
+## 四、功能清单
 
-- [ ] F3.1 Slot 数据结构
-- [ ] F3.2 Order Book（按 Model Family 分桶）
-- [ ] F3.3 Hard Filter（硬过滤条件）
-- [ ] F3.4 Compatibility Matrix（兼容性矩阵）
-- [ ] F3.5 Scoring Function（评分函数）
-- [ ] F3.6 Slot Lifecycle（生命周期管理）
-- [ ] F3.7 Slot Reservation & Release
+- [x] F3.1 Slot 数据结构
+- [x] F3.2 Order Book（按 Model Family 分桶）
+- [x] F3.3 Hard Filter（硬过滤条件）
+- [x] F3.4 Compatibility Matrix（兼容性矩阵）
+- [x] F3.5 Scoring Function（评分函数）
+- [x] F3.6 Slot Lifecycle（生命周期管理）
+- [x] F3.7 Slot Reservation & Release
+- [x] **F3.8 Pre-Lock 机制**
 
 ---
 
@@ -50,51 +49,39 @@ Node
 ## Slot Schema
 
 ```python
-class Slot(BaseModel):
-    """Slot 执行容量单元"""
-    slot_id: str
-    node_id: str
-    worker_id: str
-    
-    model: ModelInfo  # 模型信息
-    capacity: CapacityInfo  # 容量信息
-    pricing: PricingInfo  # 定价信息
-    performance: PerformanceInfo  # 性能信息
-    status: SlotStatus = SlotStatus.FREE
-
-class ModelInfo(BaseModel):
-    """模型信息"""
-    family: str  # 模型族
-    name: str  # 模型名
-
-class CapacityInfo(BaseModel):
-    """容量信息"""
-    max_concurrency: int = 1
-    current_load: int = 0
-    max_tokens_per_sec: int = 100
-    context_window: int = 4096
-
-class PricingInfo(BaseModel):
-    """定价信息"""
-    input_price: float  # 输入 token 单价
-    output_price: float  # 输出 token 单价
-
-class PerformanceInfo(BaseModel):
-    """性能信息"""
-    avg_latency_ms: int
-    success_rate: float = 0.95
-
 class SlotStatus(str, Enum):
     FREE = "free"
+    PRE_LOCKED = "pre_locked"
+    PARTIALLY_RESERVED = "partially_reserved"
+    FULLY_RESERVED = "fully_reserved"
     RESERVED = "reserved"
+    DISPATCHED = "dispatched"
     RUNNING = "running"
     RELEASED = "released"
+    FAILED = "failed"
+
+class CapacityInfo(BaseModel):
+    max_concurrency: int = 1
+    active_jobs: int = 0
+    reserved_jobs: int = 0
+    pre_locked_jobs: int = 0
+    
+    @property
+    def available_capacity(self) -> int:
+        return max(0, self.max_concurrency - 
+                   self.active_jobs - 
+                   self.reserved_jobs - 
+                   self.pre_locked_jobs)
 ```
 
-## Slot Lifecycle
+## Slot Lifecycle (v3.1)
 
 ```
-FREE → RESERVED → RUNNING → RELEASED → FREE
+FREE ───→ PRE_LOCKED ───→ RESERVED ───→ DISPATCHED ───→ RUNNING
+  ↑          │               │              │               │
+  │          │               │              │               │
+  └──────────┴───────────────┴───────────────┴───────────────┘
+                                RELEASED
 ```
 
 ---
@@ -106,54 +93,41 @@ FREE → RESERVED → RUNNING → RELEASED → FREE
 ```python
 OrderBook = {
     "qwen": {
-        "job_bids": [],  # 按 price 降序
-        "slot_asks": [], # 按 price 升序
+        "jobs": [],
+        "slots": [],
     },
     "llama": {...},
-    "gemma": {...},
-    "*": {...}  # 通用（不指定模型）
+    "*": {...}  # 通用
 }
 ```
 
-## 匹配规则
-
-1. 先按 Model Family 分桶
-2. 在桶内进行撮合
-3. 通用 Job 可匹配任意桶
-
 ---
 
-# F3.3 Hard Filter
-
-## 过滤条件
+# F3.3 Hard Filter (v3.1)
 
 ```python
-def hard_filter(slot: Slot, job: Job) -> bool:
-    """硬过滤条件（必须全部满足）"""
+def hard_filter(slot: Slot, job: Job) -> tuple[bool, str]:
+    # 1. 模型兼容性
+    if compatibility_score <= 0:
+        return False, "model_incompatible"
     
-    # 1. Slot 状态必须是 FREE
-    if slot.status != SlotStatus.FREE:
-        return False
+    # 2. Slot 状态
+    if slot.status not in [FREE, PRE_LOCKED, PARTIALLY_RESERVED]:
+        return False, "slot_not_available"
     
-    # 2. 容量检查
-    if slot.capacity.current_load >= slot.capacity.max_concurrency:
-        return False
+    # 3. 容量检查
+    if slot.capacity.available_capacity <= 0:
+        return False, "slot_at_capacity"
     
-    # 3. 价格检查
-    if slot.pricing.input_price > job.pricing_bid.max_input_price:
-        return False
-    if slot.pricing.output_price > job.pricing_bid.max_output_price:
-        return False
+    # 4. 价格检查
+    if slot.pricing.output_price > job.bid_price:
+        return False, "output_price_too_high"
     
-    # 4. 延迟检查
-    if slot.performance.avg_latency_ms > job.constraints.max_latency_ms:
-        return False
+    # 5. 延迟检查
+    if slot.performance.avg_latency_ms > job.max_latency:
+        return False, "latency_too_high"
     
-    # 5. 区域检查（可选）
-    if job.constraints.region and slot.region != job.constraints.region:
-        return False
-    
-    return True
+    return True, None
 ```
 
 ---
@@ -164,41 +138,22 @@ def hard_filter(slot: Slot, job: Job) -> bool:
 
 | 匹配类型 | 条件 | Score |
 |----------|------|-------|
-| Exact Match | `job.name == slot.name` | 1.0 |
-| Family Match | `job.family == slot.family` 且 name 不同 | 0.8 |
-| Compatible | 兼容模型（如 qwen2 → qwen3） | 0.6 |
-| Cross Family | 跨族降级 | 0.3 |
-| No Match | 不兼容 | 0 (过滤) |
+| EXACT | job.model == slot.model | 1.0 |
+| FAMILY | 同家族 + 版本/Size 满足 | 0.8 |
+| COMPATIBLE | 兼容模型 | 0.6 |
+| CROSS_FAMILY | 跨家族 | 0.3 |
+| INVALID | 不兼容 | 0.0 |
 
-## 兼容性判断
+## 版本覆盖规则
 
-```python
-def get_compatibility(job: Job, slot: Slot) -> float:
-    """获取兼容性评分"""
-    
-    job_model = job.model_requirement
-    slot_model = slot.model
-    
-    # Exact Match
-    if job_model.name and job_model.name == slot_model.name:
-        return 1.0
-    
-    # Family Match
-    if job_model.family and job_model.family == slot_model.family:
-        return 0.8
-    
-    # 通用任务（无 model 要求）
-    if not job_model.name and not job_model.family:
-        return 1.0  # 通用任务可匹配任何 slot
-    
-    return 0.0  # No Match
+```
+4.0 → 3.5 → 3.0 → 2.5 → 2.0 (可降级)
+70b → 14b → 7b → 2b (只能大服务小)
 ```
 
 ---
 
 # F3.5 Scoring Function
-
-## 综合评分
 
 ```
 Score = 0.30 * PriceScore 
@@ -208,115 +163,91 @@ Score = 0.30 * PriceScore
       + 0.15 * CompatibilityScore
 ```
 
-## 各维度评分
-
-```python
-def calculate_score(slot: Slot, job: Job) -> float:
-    """计算综合评分"""
-    
-    # Price Score (越低越好)
-    price_score = 1 - (slot.pricing.output_price / job.pricing_bid.max_output_price)
-    
-    # Latency Score (越低越好)
-    latency_score = 1 - (slot.performance.avg_latency_ms / job.constraints.max_latency_ms)
-    
-    # Load Score (剩余容量越多越好)
-    load_score = 1 - (slot.capacity.current_load / slot.capacity.max_concurrency)
-    
-    # Reputation Score
-    reputation_score = slot.performance.success_rate
-    
-    # Compatibility Score
-    compatibility_score = get_compatibility(job, slot)
-    
-    # 综合评分
-    score = (
-        0.30 * price_score +
-        0.25 * latency_score +
-        0.15 * load_score +
-        0.15 * reputation_score +
-        0.15 * compatibility_score
-    )
-    
-    return score
-```
-
 ---
 
 # F3.6 Slot Lifecycle
-
-## 状态流转
-
-```
-FREE ────→ RESERVED ────→ RUNNING ────→ RELEASED ───→ FREE
- │              │              │
- └──────────────┴──────────────┴──→ FAILED
-```
 
 ## 状态定义
 
 | 状态 | 描述 |
 |------|------|
 | FREE | 可用，等待匹配 |
-| RESERVED | 已被 Job 预约 |
-| RUNNING | 正在执行 Job |
-| RELEASED | 执行完成，释放资源 |
-| FAILED | 执行失败 |
+| PRE_LOCKED | 预锁定中 |
+| PARTIALLY_RESERVED | 部分预约 |
+| FULLY_RESERVED | 满 |
+| RESERVED | 已预约 |
+| DISPATCHED | 已分发 |
+| RUNNING | 执行中 |
+| RELEASED | 已释放 |
 
 ---
 
-# F3.7 Slot Reservation & Release
-
-## Reservation
+# F3.7 Reservation & Release
 
 ```python
-def reserve_slot(slot_id: str, job_id: str) -> bool:
-    """预约 Slot"""
-    slot = get_slot(slot_id)
-    
-    if slot.status != SlotStatus.FREE:
+def reserve(slot: Slot, job_id: str) -> bool:
+    if not slot.is_available():
         return False
-    
-    if slot.capacity.current_load >= slot.capacity.max_concurrency:
+    slot.pre_lock(job_id, ttl_ms=5000)
+    return True
+
+def release(slot: Slot, job_id: str) -> bool:
+    return slot.finish_job(job_id)
+```
+
+---
+
+# F3.8 Pre-Lock 机制 (v3.1 新增)
+
+## Pre-Lock 请求
+
+```python
+def pre_lock(slot: Slot, job_id: str, ttl_ms: int = 5000) -> bool:
+    """创建 Pre-Lock"""
+    if slot.capacity.available_capacity <= 0:
         return False
-    
-    # 更新状态
-    slot.status = SlotStatus.RESERVED
-    slot.current_job_id = job_id
-    slot.capacity.current_load += 1
-    
+    # 创建 PRE_LOCK 类型的 SlotLock
     return True
 ```
 
-## Release
+## Pre-Lock Ack
 
 ```python
-def release_slot(slot_id: str, job_id: str) -> bool:
-    """释放 Slot"""
-    slot = get_slot(slot_id)
-    
-    if slot.current_job_id != job_id:
-        return False
-    
-    # 更新状态
-    slot.status = SlotStatus.RELEASED
-    slot.current_job_id = None
-    slot.capacity.current_load -= 1
-    
-    # 延迟重置为 FREE
-    schedule_reset_to_free(slot_id, delay_ms=1000)
-    
+def confirm_pre_lock(slot: Slot, job_id: str) -> bool:
+    """确认 Pre-Lock 转换为 HARD_LOCK"""
+    # 移除 PRE_LOCK，添加 HARD_LOCK
+    # 更新 capacity.reserved_jobs += 1
     return True
 ```
+
+## Lock 类型
+
+| 类型 | TTL | 说明 |
+|------|-----|------|
+| PRE_LOCK | 5000ms | 临时预占 |
+| HARD_LOCK | 无 | 已确认预约 |
+| RUNNING | 无 | 执行中 |
 
 ---
 
 # 实现检查点
 
-- [ ] CP-0024: F3.1 Slot 数据结构创建
-- [ ] CP-0025: F3.2 Order Book 实现
-- [ ] CP-0026: F3.3 Hard Filter 实现
-- [ ] CP-0027: F3.4 Compatibility Matrix 实现
-- [ ] CP-0028: F3.5 Scoring Function 实现
-- [ ] CP-0029: F3.6-7 Slot Lifecycle 实现
-- [ ] CP-0030: E2E 测试
+- [x] CP-0024: F3.1 Slot 数据结构创建
+- [x] CP-0025: F3.2 Order Book 实现
+- [x] CP-0026: F3.3 Hard Filter 实现
+- [x] CP-0027: F3.4 Compatibility Matrix 实现
+- [x] CP-0028: F3.5 Scoring Function 实现
+- [x] CP-0029: F3.6-7 Slot Lifecycle 实现
+- [x] CP-0030: E2E 测试
+- [x] CP-0031: F3.8 Pre-Lock 机制
+
+---
+
+## 相关文档
+
+- [[DCM-v3.1-Architecture]] - 核心架构
+- [[DCM-v3.1-PreLock-Mechanism]] - Pre-Lock 机制
+- [[TEST-REPORT-2026-04-13]] - 测试报告
+"""
+
+# 文件位置: DCM/docs/Function/F3-Match-Engine-2.0.md

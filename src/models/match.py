@@ -1,6 +1,6 @@
 """
-Match Model - F3: 撮合引擎
-来源: PRD 0.2 Section 4.3 & Function/F3
+Match Model - DCM v3.0
+Match = 匹配结果 + 执行链路
 """
 
 from datetime import datetime
@@ -10,45 +10,60 @@ import uuid
 
 
 class MatchCreate(BaseModel):
-    """Match 创建参数（内部使用）"""
+    """Match 创建参数"""
     job_id: str
+    slot_id: str
     node_id: str
+    worker_id: str
     locked_price: float
 
 
 class Match(BaseModel):
-    """Match 完整模型"""
-    match_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    job_id: str
-    node_id: str
-    locked_price: float  # 撮合瞬间锁定，不受后续价格变动影响
+    """Match 完整模型
+    
+    Match 包含完整的执行链路信息：
+    Job → Slot → Node → Worker → Runtime → Model
+    """
+    match_id: str = Field(default_factory=lambda: f"match_{uuid.uuid4().hex[:8]}")
+    
+    # 核心关联
+    job_id: str = Field(..., description="Job ID")
+    slot_id: str = Field(..., description="Slot ID")
+    node_id: str = Field(..., description="Node ID")
+    worker_id: str = Field(..., description="Worker ID")
+    
+    # 定价
+    locked_price: float = Field(..., description="锁定价格")
     matched_at: datetime = Field(default_factory=datetime.utcnow)
     
-    # 实际使用的模型（通用任务会填充）
-    used_model: Optional[str] = None
+    # 模型
+    model: str = Field(..., description="实际使用的模型")
     
-    # 执行后填充
+    # 执行结果
     result_hash: Optional[str] = None
     actual_latency_ms: Optional[int] = None
     
-    # 验证状态
+    # 验证
     verified: bool = False
     verification_layer: Optional[int] = None  # 1 或 2
-    layer2_consistency: Optional[float] = None  # 相似度（Layer 2）
+    layer2_consistency: Optional[float] = None
     
-    # 结算状态
+    # 结算
     settled: bool = False
     settled_at: Optional[datetime] = None
     
-    # 失败重试相关
+    # 失败重试
     retry_count: int = 0
-    original_match_id: Optional[str] = None  # 重试时指向原始 Match
+    original_match_id: Optional[str] = None
 
 
 class MatchResponse(BaseModel):
-    """Match API 响应（内部）"""
+    """Match API 响应"""
     match_id: str
     job_id: str
+    slot_id: str
     node_id: str
+    worker_id: str
     locked_price: float
     matched_at: datetime
+    model: str

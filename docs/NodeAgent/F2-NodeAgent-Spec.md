@@ -1,12 +1,14 @@
-# F2-NodeAgent: 节点客户端软件规范
+"""
+F2-NodeAgent: 节点客户端软件规范
+================================
 
-> 来源：PRD 九、Q3 & F2 节点注册与状态管理
-> 优先级：P0
-> 状态：规范定义中
+> 版本: 3.1
+> 优先级: P0
+> 状态: 已实现
 
 ---
 
-## 功能概述
+## 一、功能概述
 
 Node Agent 是运行在 Seller 节点上的客户端软件，负责：
 1. 连接 Router 注册节点信息
@@ -17,7 +19,7 @@ Node Agent 是运行在 Seller 节点上的客户端软件，负责：
 
 ---
 
-## 架构总览
+## 二、架构总览
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -36,7 +38,6 @@ Node Agent 是运行在 Seller 节点上的客户端软件，负责：
 └─────────────────────────────────────────────────────────────┘
                           │
                     WebSocket / HTTP
-                          │
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                      Router Service                          │
@@ -46,7 +47,7 @@ Node Agent 是运行在 Seller 节点上的客户端软件，负责：
 
 ---
 
-## 通信协议
+## 三、通信协议
 
 ### 协议选择策略
 
@@ -62,21 +63,16 @@ Node Agent 是运行在 Seller 节点上的客户端软件，负责：
 WebSocket URL: ws://{router_host}:{router_port}/ws/nodes/{node_id}
 ```
 
-**连接流程：**
-1. 节点建立 WebSocket 连接
-2. 发送注册消息（node_id + capabilities）
-3. Router 返回确认消息
-4. 保持连接，接收 Job 推送或心跳响应
-
 **消息格式（JSON）：**
+
 ```json
 // 节点 → Router: 注册
 {
   "type": "register",
   "node_id": "uuid-xxx",
   "capabilities": {
-    "models": ["llama3-8b"],
-    "max_concurrent": 1
+    "models": ["qwen2.5:7b", "qwen3.5:latest"],
+    "max_concurrent": 4
   }
 }
 
@@ -86,7 +82,7 @@ WebSocket URL: ws://{router_host}:{router_port}/ws/nodes/{node_id}
   "match_id": "uuid-yyy",
   "job": {
     "job_id": "uuid-zzz",
-    "model": "llama3-8b",
+    "model": "qwen2.5:7b",
     "input_tokens": 2048,
     "output_tokens_limit": 1024,
     "max_latency": 5000,
@@ -108,23 +104,14 @@ WebSocket URL: ws://{router_host}:{router_port}/ws/nodes/{node_id}
 }
 ```
 
-### HTTP Polling（降级模式）
-
-```
-Poll URL: POST /api/v1/nodes/{node_id}/poll
-Heartbeat URL: POST /api/v1/nodes/{node_id}/heartbeat
-```
-
-**轮询间隔：** 默认 5 秒，可配置
-
 ---
 
-## Ollama 集成
+## 四、Ollama 集成
 
 ### 支持版本
 
 - Ollama **0.1.25+**
-- 支持模型：`llama3-8b`
+- 支持模型：`qwen2.5:7b`, `qwen3.5:latest`, `gemma4:e4b` 等
 
 ### Ollama API 调用
 
@@ -134,7 +121,7 @@ POST http://localhost:11434/api/generate
 
 Request:
 {
-  "model": "llama3-8b",
+  "model": "qwen2.5:7b",
   "prompt": "<input_tokens decoded>",
   "options": {
     "num_predict": 1024,  # output_tokens_limit
@@ -152,20 +139,9 @@ Response:
 }
 ```
 
-### Token 编码
-
-MVP 阶段使用简单编码（UTF-8 bytes → token 近似）：
-```python
-def estimate_tokens(text: str) -> int:
-    """估算 token 数量（简化版）"""
-    return len(text.encode('utf-8')) // 4
-```
-
-> ⚠️ 正式版应使用 tiktoken 或等效 tokenizer
-
 ---
 
-## Node Agent 状态机
+## 五、Node Agent 状态机
 
 ```
 DISCONNECTED → CONNECTING → IDLE → PROCESSING
@@ -188,11 +164,10 @@ DISCONNECTED → CONNECTING → IDLE → PROCESSING
 | PROCESSING | 正在执行推理 | ❌ |
 | COMPLETED | 结果已提交 | ✅ |
 | ERROR | 执行出错 | ⚠️ 等待重试 |
-| DISCONNECTED | 连接断开 | ❌ |
 
 ---
 
-## Job 执行流程
+## 六、Job 执行流程
 
 ```
 1. 接收 Job (WebSocket / Polling)
@@ -206,20 +181,40 @@ DISCONNECTED → CONNECTING → IDLE → PROCESSING
 5. 计算 SHA256(result)
    ↓
 6. 提交结果到 Router
-   POST /api/v1/nodes/{node_id}/jobs/{job_id}/result
-   {
-     "result": "<base64_encoded>",
-     "result_hash": "sha256:...",
-     "actual_latency_ms": 3200,
-     "actual_output_tokens": 856
-   }
    ↓
 7. 等待验证结果（可选）
 ```
 
 ---
 
-## 心跳机制
+## 七、Node_ID 管理 (v3.1 增强)
+
+### 7.1 生成规则
+- Node_ID 必须自动生成（UUID）
+- 不可自定义
+- 首次注册后持久化到本地文件
+
+### 7.2 持久化存储
+```python
+# 本地文件
+.node_id      # 存储 Node_ID
+.node_info    # 存储节点能力信息
+```
+
+### 7.3 恢复流程
+```
+Agent 启动
+    ↓
+加载本地 .node_id
+    ↓
+检查 DCM 是否存在该 Node_ID
+    ├── 存在 → 使用该 Node_ID
+    └── 不存在 → 注册新节点
+```
+
+---
+
+## 八、心跳机制
 
 ### 心跳间隔
 
@@ -241,33 +236,7 @@ DISCONNECTED → CONNECTING → IDLE → PROCESSING
 
 ---
 
-## 错误处理
-
-### 错误类型与重试
-
-| 错误类型 | 处理方式 | 重试 |
-|---------|---------|------|
-| Ollama 无响应 | 标记失败，返回 error | ❌ |
-| Ollama 超时 | 标记超时，返回 latency_exceeded | ❌ |
-| 网络断开 | 重连 + 重新拉取 | ✅ |
-| 结果提交失败 | 重试 3 次，间隔 5s | ✅ |
-| Token 超限 | 返回实际 token 数 | ❌ |
-
-### 错误消息格式
-
-```json
-{
-  "type": "job_error",
-  "job_id": "uuid-xxx",
-  "error_type": "ollama_error" | "timeout" | "network_error",
-  "error_message": "具体错误信息",
-  "timestamp": 1712841600000
-}
-```
-
----
-
-## 配置参数
+## 九、配置参数
 
 ```yaml
 # node_agent.yaml
@@ -283,13 +252,15 @@ router:
 ollama:
   host: "localhost"
   port: 11434
-  model: "llama3-8b"
+  models:
+    - "qwen2.5:7b"
+    - "qwen3.5:latest"
   timeout: 60  # 秒
 
 agent:
   node_id: ""  # 注册后填充
   heartbeat_interval: 30  # 秒
-  max_concurrent_jobs: 1  # MVP 仅支持 1
+  max_concurrent_jobs: 4  # v3.1 支持多并发
 
 logging:
   level: "INFO"
@@ -298,39 +269,7 @@ logging:
 
 ---
 
-## 安装与部署
-
-### 环境要求
-
-- Python 3.9+
-- Ollama 0.1.25+
-- 网络可达 Router
-
-### 安装步骤
-
-```bash
-# 1. 克隆项目
-git clone https://github.com/yurimeng/DCM.git
-cd DCM/src/agents
-
-# 2. 安装依赖
-pip install -r requirements.txt
-
-# 3. 配置
-cp config.yaml.example config.yaml
-# 编辑 config.yaml 填入 node_id
-
-# 4. 启动 Ollama（后台）
-ollama serve &
-ollama pull llama3-8b
-
-# 5. 启动 Node Agent
-python node_agent.py
-```
-
----
-
-## API 接口依赖
+## 十、API 接口依赖
 
 | 操作 | Router API | 说明 |
 |------|-----------|------|
@@ -342,42 +281,46 @@ python node_agent.py
 
 ---
 
-## 安全考虑
+## 十一、错误处理
 
-| 方面 | 措施 |
-|------|------|
-| 节点身份 | JWT Token 认证 |
-| 结果完整性 | SHA256 哈希，Router 验证 |
-| 通信安全 | HTTPS / WSS（生产环境） |
-| 限流 | 每节点 10 req/s |
-
----
-
-## MVP 约束
-
-1. **单模型**：仅支持 llama3-8b
-2. **单并发**：同一时间仅处理 1 个 Job
-3. **简单 Token 估算**：使用 UTF-8 bytes / 4
-4. **无加密**：MVP 使用明文通信（生产环境必须 TLS）
+| 错误类型 | 处理方式 | 重试 |
+|---------|---------|------|
+| Ollama 无响应 | 标记失败，返回 error | ❌ |
+| Ollama 超时 | 标记超时，返回 latency_exceeded | ❌ |
+| 网络断开 | 重连 + 重新拉取 | ✅ |
+| 结果提交失败 | 重试 3 次，间隔 5s | ✅ |
+| Token 超限 | 返回实际 token 数 | ❌ |
 
 ---
 
-## 依赖关系
+## 十二、实现清单
 
-```
-Node Agent
-  ├── Ollama（执行推理）
-  ├── Router API（通信）
-  └── F2 节点注册 → F3 撮合 → F5 验证 → F6 结算
-```
+- [x] Node_ID 自动生成
+- [x] Node_ID 本地持久化
+- [x] metadata 扩展字段
+- [x] 心跳同步到 matching_service
+- [x] Slot 概念支持
+- [x] Multi-Job 并发支持
+- [x] WebSocket/HTTP 双协议
 
 ---
 
-## 后续扩展（PRD 1.0）
+## 十三、相关文档
+
+- [[DCM-v3.1-Architecture]] - 核心架构
+- [[DCM-v3.1-PreLock-Mechanism]] - Pre-Lock 机制
+- [[F3-Match-Engine-2.0]] - Match Engine 规范
+
+---
+
+## 十四、后续扩展
 
 - [ ] 多模型支持
-- [ ] 多并发 Job
-- [ ] WebSocket 加密（TLS）
+- [ ] GPU 利用率监控
+- [ ] WebSocket TLS 加密
 - [ ] 本地 tokenizer
 - [ ] 批量 Job 处理
-- [ ] GPU 利用率监控
+
+"""
+
+# 文件位置: DCM/docs/NodeAgent/F2-NodeAgent-Spec.md
