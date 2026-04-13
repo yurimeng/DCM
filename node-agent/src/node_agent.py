@@ -56,6 +56,9 @@ class NodeConfig:
         if os.path.exists(path):
             with open(path, 'r') as f:
                 data = json.load(f)
+                # 调试日志
+                import logging
+                logging.getLogger(__name__).debug(f"加载配置: {data}")
                 return cls(**data)
         return cls()
 
@@ -69,27 +72,48 @@ class NodeConfig:
                 "slot_count": self.slot_count,
                 "worker_count": self.worker_count,
                 "dcm_url": self.dcm_url,
+                "p2p_enabled": self.p2p_enabled,
+                "relay_enabled": self.relay_enabled,
             }, f)
 
 
 class DCMNodeAgent:
     """DCM Node Agent - 边缘执行节点
-
+    
     支持多网络协议:
     - HTTPS: 标准轮询
+    - QUIC: HTTP/3 低延迟
     - P2P: 点对点通信 (gossipsub)
-    - Relay: 中继穿透
+    - Relay: 中继穿透 (NAT 穿透)
+    
+    Prompt 下发: P2P/Relay/QUIC (优先)
+    Job/结算: HTTPS
     """
-
+    
     def __init__(self, config: Optional[NodeConfig] = None):
-        self.config = config or NodeConfig()
-
+        self.config = config or NodeConfig.from_file()
+        
+        # 确定首选网络类型
+        primary_network = NetworkType.HTTPS
+        if self.config.relay_enabled:
+            primary_network = NetworkType.RELAY
+        elif self.config.p2p_enabled:
+            primary_network = NetworkType.P2P
+        
+        # 保存首选网络 (用于日志)
+        self._preferred_network = primary_network
+        
         # 网络适配器
         self.network = NetworkAdapter(NetworkConfig(
-            primary=NetworkType.HTTPS,
+            primary=primary_network,
             https_endpoint=self.config.dcm_url,
             fallback_enabled=True,
+            relay_enabled=self.config.relay_enabled,
+            quic_enabled=True,
         ))
+        
+        # 记录原始请求的网络类型 (用于日志)
+        self._requested_network: Optional[NetworkType] = None
 
         # Runtime 适配器
         self.runtime = create_runtime_adapter({
@@ -243,32 +267,31 @@ class DCMNodeAgent:
     def poll_job(self) -> Optional[Invoke]:
         """轮询 Job - 返回 Invoke 结构
 
-        支持多网络协议:
-        - HTTPS: 标准 REST API
-        - P2P: 点对点推送 (预留)
-        - Relay: 中继推送 (预留)
+        网络优先级:
+        - QUIC: HTTP/3 (低延迟)
+        - Relay: 中继穿透
+        - P2P: 点对点
+        - HTTPS: 降级 fallback
+
+        Prompt 通过首选协议下发，Job/结算走 HTTPS
         """
         if not self.config.node_id:
             return None
 
         try:
-            # HTTPS 轮询
-            if self.network.current_type in [NetworkType.HTTPS, NetworkType.WSS]:
-                return self._poll_job_https()
-
-            # QUIC 轮询
-            elif self.network.current_type == NetworkType.QUIC:
+            # 记录原始请求的网络类型
+            original_type = self.network.current_type
+            
+            # 根据网络类型选择轮询方式
+            if original_type == NetworkType.QUIC:
                 return self._poll_job_quic()
-
-            # P2P 轮询
-            elif self.network.current_type == NetworkType.P2P:
-                return self._poll_job_p2p()
-
-            # Relay 轮询
-            elif self.network.current_type == NetworkType.RELAY:
+            elif original_type == NetworkType.RELAY:
                 return self._poll_job_relay()
-
-            return None
+            elif original_type == NetworkType.P2P:
+                return self._poll_job_p2p()
+            else:
+                # HTTPS 或其他
+                return self._poll_job_https()
 
         except Exception as e:
             logger.error(f"轮询 Job 异常: {e}")
@@ -308,7 +331,7 @@ class DCMNodeAgent:
 
     def _poll_job_quic(self) -> Optional[Invoke]:
         """QUIC 轮询
-        
+
         通过 QUIC/HTTP3 协议拉取 Job
         优点: 低延迟, 0-RTT 恢复, 连接迁移
         """
@@ -318,23 +341,23 @@ class DCMNodeAgent:
                 f"/api/v1/nodes/{self.config.node_id}/poll",
                 {}
             )
-            
+
             if not result:
-                # QUIC 失败，降级到 HTTPS
-                logger.warning("QUIC 轮询失败，降级到 HTTPS")
+                # QUIC 失败,降级到 HTTPS
+                logger.warning("QUIC 轮询失败,降级到 HTTPS")
                 self.network.switch_to_https()
                 return self._poll_job_https()
-            
+
             if not result.get("has_job"):
                 return None
-            
+
             # 构建 Invoke
             invoke = Invoke(result)
             invoke.network_type = NetworkType.QUIC
-            
+
             logger.info(f"📥 QUIC 拉取 Job: {invoke.job_id[:8]}...")
             return invoke
-            
+
         except Exception as e:
             logger.error(f"QUIC 轮询异常: {e}")
             # 降级到 HTTPS
@@ -343,26 +366,26 @@ class DCMNodeAgent:
 
     def _poll_job_p2p(self) -> Optional[Invoke]:
         """P2P 轮询
-        
+
         通过 libp2p gossipsub 订阅 Job 消息
         优点: 无需轮询, 实时推送, 去中心化
         """
         try:
             # 获取 Relay 地址
             relay_addr = self.network.get_relay_addr()
-            
+
             if relay_addr:
-                logger.info(f"🔗 P2P 模式，使用 Relay: {relay_addr}")
+                logger.info(f"🔗 P2P 模式,使用 Relay: {relay_addr}")
             else:
-                logger.warning("Relay 未连接，P2P 不可用")
+                logger.warning("Relay 未连接,P2P 不可用")
                 # 降级到 HTTPS
                 self.network.current_type = NetworkType.HTTPS
                 return self._poll_job_https()
-            
+
             # TODO: 实现 gossipsub 消息订阅
             # 这里暂时使用 HTTPS 作为后备
             return self._poll_job_https()
-            
+
         except Exception as e:
             logger.error(f"P2P 轮询异常: {e}")
             self.network.current_type = NetworkType.HTTPS
@@ -370,37 +393,37 @@ class DCMNodeAgent:
 
     def _poll_job_relay(self) -> Optional[Invoke]:
         """Relay 轮询
-        
+
         通过 circuit relay 中继拉取 Job
         用于 NAT 穿透场景
         """
         try:
             relay_addr = self.network.get_relay_addr()
-            
+
             if relay_addr:
                 logger.info(f"🔄 通过 Relay 拉取: {relay_addr}")
-            
+
             # 使用网络适配器发送 Relay 请求
             result = self.network.request(
                 "POST",
                 f"/api/v1/nodes/{self.config.node_id}/poll",
                 {}
             )
-            
+
             if not result:
-                logger.warning("Relay 请求失败，降级到 HTTPS")
+                logger.warning("Relay 请求失败,降级到 HTTPS")
                 self.network.current_type = NetworkType.HTTPS
                 return self._poll_job_https()
-            
+
             if not result.get("has_job"):
                 return None
-            
+
             # 构建 Invoke
             invoke = Invoke(result)
             invoke.network_type = NetworkType.RELAY
-            
+
             return invoke
-            
+
         except Exception as e:
             logger.error(f"Relay 轮询异常: {e}")
             self.network.current_type = NetworkType.HTTPS
@@ -416,16 +439,14 @@ class DCMNodeAgent:
     ) -> bool:
         """提交执行结果
 
-        支持多网络返回:
-        - HTTPS: REST API
-        - QUIC: HTTP/3 低延迟
-        - P2P: 点对点传输
-        - Relay: 中继传输 (NAT 穿透)
+        注意: Job 提交和结算强制走 HTTPS
+        只有 Prompt 可以通过 QUIC/Relay/P2P 获取
         """
         if not self.config.node_id:
             return False
 
-        network_type = network_type or self.network.current_type
+        # 记录 prompt 获取时使用的网络类型
+        prompt_network = network_type or self.network.current_type
 
         try:
             # Base64 编码结果
@@ -438,17 +459,11 @@ class DCMNodeAgent:
                 "result_hash": result_hash,
                 "actual_latency_ms": latency_ms,
                 "actual_output_tokens": output_tokens,
-                "network_type": network_type.value,
+                "prompt_network": prompt_network.value,  # 记录 prompt 来源
             }
 
-            # 根据网络类型选择提交方式
-            if network_type == NetworkType.QUIC:
-                return self._submit_result_quic(job_id, payload)
-            elif network_type == NetworkType.RELAY:
-                return self._submit_result_relay(job_id, payload)
-            else:
-                # HTTPS 和 P2P 暂时降级到 HTTPS
-                return self._submit_result_https(job_id, payload)
+            # Job 提交和结算强制走 HTTPS
+            return self._submit_result_https(job_id, payload)
 
         except Exception as e:
             logger.error(f"提交结果异常: {e}")
@@ -477,7 +492,7 @@ class DCMNodeAgent:
 
     def _submit_result_quic(self, job_id: str, payload: Dict) -> bool:
         """QUIC 提交结果
-        
+
         通过 QUIC/HTTP3 协议提交结果
         优点: 低延迟, 0-RTT 恢复
         """
@@ -487,22 +502,22 @@ class DCMNodeAgent:
                 f"/api/v1/nodes/{self.config.node_id}/jobs/{job_id}/result",
                 payload
             )
-            
+
             if result and result.get("received"):
                 logger.info(f"✅ QUIC 结果提交成功 (Layer {result.get('layer', 1)})")
                 return True
             else:
-                # QUIC 失败，降级到 HTTPS
-                logger.warning("QUIC 提交失败，降级到 HTTPS")
+                # QUIC 失败,降级到 HTTPS
+                logger.warning("QUIC 提交失败,降级到 HTTPS")
                 return self._submit_result_https(job_id, payload)
-                
+
         except Exception as e:
             logger.error(f"QUIC 提交失败: {e}")
             return self._submit_result_https(job_id, payload)
 
     def _submit_result_relay(self, job_id: str, payload: Dict) -> bool:
         """Relay 提交结果
-        
+
         通过 circuit relay 中继提交结果
         用于 NAT 穿透场景
         """
@@ -513,14 +528,14 @@ class DCMNodeAgent:
                 f"/api/v1/nodes/{self.config.node_id}/jobs/{job_id}/result",
                 payload
             )
-            
+
             if result and result.get("received"):
                 logger.info(f"✅ Relay 结果提交成功 (Layer {result.get('layer', 1)})")
                 return True
             else:
-                logger.warning("Relay 提交失败，降级到 HTTPS")
+                logger.warning("Relay 提交失败,降级到 HTTPS")
                 return self._submit_result_https(job_id, payload)
-                
+
         except Exception as e:
             logger.error(f"Relay 提交失败: {e}")
             return self._submit_result_https(job_id, payload)
@@ -540,8 +555,18 @@ class DCMNodeAgent:
 
         # 获取生成参数
         max_tokens = invoke.get_max_tokens()
-
-        logger.info(f"📥 处理 Job: {job_id[:8]}... | network: {invoke.network_type.value} | model: {model_name} | prompt: {prompt[:30]}...")
+        
+        # 获取网络类型
+        network_type = invoke.network_type.value
+        actual_network = self.network.current_type.value
+        
+        # 显示网络来源信息
+        if network_type != actual_network:
+            net_info = f"prompt:{network_type}→actual:{actual_network}"
+        else:
+            net_info = network_type
+        
+        logger.info(f"📥 处理 Job: {job_id[:8]}... [{net_info}] | {model_name} | prompt: {prompt[:20]}...")
 
         # 构建 runtime invoke
         runtime_invoke = invoke.to_dict()
@@ -567,11 +592,14 @@ class DCMNodeAgent:
 
     def run(self):
         """运行 Agent 主循环"""
+        # 使用保存的首选网络
+        preferred_network = self._preferred_network
+        
         logger.info("=" * 50)
         logger.info("DCM Node Agent 启动")
         logger.info(f"DCM: {self.config.dcm_url}")
         logger.info(f"Model: {self.config.model}")
-        logger.info(f"Network: {self.network.current_type.value}")
+        logger.info(f"Prompt via: {preferred_network.value}")
         logger.info("=" * 50)
 
         # 确保节点在线
@@ -587,7 +615,7 @@ class DCMNodeAgent:
         self.running = True
         heartbeat_count = 0
 
-        logger.info("✅ 节点已上线,开始处理 Job")
+        logger.info(f"✅ 节点已上线 | 网络: {self.network.current_type.value} | Prompt via: {preferred_network.value}")
 
         while self.running:
             try:

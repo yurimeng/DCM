@@ -402,25 +402,46 @@ class NetworkAdapter:
     # ==================== 连接管理 ====================
     
     def connect(self) -> bool:
-        """建立连接 (智能选择最优协议)"""
+        """建立连接 (智能选择最优协议)
+        
+        优先级: QUIC > HTTPS > Relay > P2P
+        如果首选协议不可用，自动降级
+        """
         with self._lock:
-            # 优先尝试 QUIC
+            # 1. 优先尝试 QUIC
             if self.current_type == NetworkType.QUIC and self._quic:
                 if self._connect_quic():
+                    logger.info("✅ 使用 QUIC 连接")
                     return True
-                # QUIC 失败，降级到 HTTPS
-                self.current_type = NetworkType.HTTPS
+                # QUIC 失败，标记但继续尝试 HTTPS
+                logger.info("⚠️ QUIC 不可用，降级到 HTTPS")
             
-            # HTTPS
-            if self.current_type == NetworkType.HTTPS:
-                if self._connect_https():
-                    return True
+            # 2. HTTPS (主要协议)
+            if self._connect_https():
+                # 如果之前想用 QUIC，现在用 HTTPS
+                if self.current_type == NetworkType.QUIC:
+                    self.current_type = NetworkType.HTTPS
+                return True
             
-            # Relay (最后降级)
+            # 3. Relay (NAT 穿透)
             if self.config.relay_enabled and self._relay:
                 if self._connect_relay():
                     self.current_state = NetworkState.P2P_RELAY
+                    logger.info("✅ 使用 Relay 连接")
                     return True
+                # Relay 也失败，降级到 HTTPS
+                logger.info("⚠️ Relay 不可用，降级到 HTTPS")
+            
+            # 4. P2P 直接连接 (最后尝试)
+            if self.current_type == NetworkType.P2P:
+                # P2P 需要 Relay 或公网 IP，暂不支持
+                logger.warning("⚠️ P2P 需要 Relay 支持，降级到 HTTPS")
+                self.current_type = NetworkType.HTTPS
+                if self._connect_https():
+                    return True
+            
+            self.current_state = NetworkState.OFFLINE
+            return False
             
             self.current_state = NetworkState.OFFLINE
             return False
