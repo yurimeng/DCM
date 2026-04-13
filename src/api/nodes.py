@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from datetime import datetime
+import json
 import uuid
 
 from ..database import get_db
