@@ -379,8 +379,16 @@ async def execute_settlement_endpoint(
     escrow_repo = EscrowRepository(db)
     db_escrow = escrow_repo.get_by_match(request.match_id)
     
+    # 如果没找到，尝试按 job_id 查找（备用逻辑）
     if not db_escrow:
-        raise HTTPException(status_code=404, detail="Escrow not found")
+        # 先查找 Match 获取 job_id
+        match_repo = MatchRepository(db)
+        db_match_alt = match_repo.get(request.match_id)
+        if db_match_alt:
+            db_escrow = escrow_repo.get_by_job(db_match_alt.job_id)
+    
+    if not db_escrow:
+        raise HTTPException(status_code=404, detail="Escrow not found for match_id: " + request.match_id)
     
     # 计算结算
     actual_cost = escrow_service._calculate_cost(
