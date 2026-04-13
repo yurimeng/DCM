@@ -63,9 +63,12 @@ async def create_job(
     match = matching_service.trigger_match(job.job_id)
     
     if match:
-        # 更新 Job 状态
-        job_repo.update(job.job_id, status=JobStatus.MATCHED)
+        # 更新 Job 状态（不自动 commit）
         db_job = job_repo.get(job.job_id)
+        if db_job:
+            from datetime import datetime
+            db_job.status = JobStatusDB.MATCHED
+            db_job.matched_at = datetime.utcnow()
         
         # 保存 Match 到数据库
         from ..models.db_models import MatchDB
@@ -80,6 +83,8 @@ async def create_job(
         
         # 更新 Escrow
         db_escrow.match_id = match.match_id
+        
+        # 一次性提交所有更改
         db.commit()
     
     # 5. 返回响应
