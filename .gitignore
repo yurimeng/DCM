@@ -90,7 +90,7 @@ contracts/artifacts/
 contracts/deployments/
 
 # npm/pip packages
-*.txt
+# *.txt (disabled for Docker)
 
 # Coverage reports
 .coverage
