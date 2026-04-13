@@ -128,7 +128,6 @@ async def node_online(
     # 注册节点到撮合引擎（内存服务）
     from ..models import Node
     import json
-import base64
     node_model = Node(
         node_id=node_id,
         gpu_type=db_node.gpu_type,
