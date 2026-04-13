@@ -194,22 +194,55 @@ class DCMNodeAgent:
             logger.error(f"注册异常: {e}")
             return False
 
-    def ensure_online(self) -> bool:
-        """确保节点在线"""
-        # 连接网络
-        if not self.network.connect():
-            logger.warning("网络连接失败")
+    def ensure_online(self, max_retries: int = -1) -> bool:
+        """确保节点在线
+        
+        Args:
+            max_retries: 最大重试次数，-1 表示无限重试
+            
+        如果无法连接，会每 30 秒重试一次，直到成功或达到最大重试次数
+        """
+        retry_count = 0
+        retry_interval = 30  # 30 秒重试一次
+        
+        while True:
+            retry_count += 1
+            
+            # 尝试连接网络
+            if not self.network.connect():
+                if max_retries > 0 and retry_count >= max_retries:
+                    logger.error(f"网络连接失败，已重试 {retry_count} 次，退出")
+                    return False
+                logger.warning(f"网络连接失败，{retry_interval} 秒后重试... ({retry_count})")
+                time.sleep(retry_interval)
+                continue
 
-        # 检查节点是否存在
-        if not self.check_node_exists():
-            if not self.register_node():
+            # 检查节点是否存在
+            if not self.check_node_exists():
+                if not self.register_node():
+                    if max_retries > 0 and retry_count >= max_retries:
+                        logger.error(f"节点注册失败，已重试 {retry_count} 次，退出")
+                        return False
+                    logger.warning(f"节点注册失败，{retry_interval} 秒后重试... ({retry_count})")
+                    time.sleep(retry_interval)
+                    continue
+
+            # 激活节点为 ONLINE
+            if not self.activate_online():
+                logger.warning("节点激活失败")
+                # 激活失败不重试，继续尝试心跳
+
+            # 心跳检查
+            if self.heartbeat():
+                logger.info(f"✅ 节点在线 ({retry_count} 次尝试)")
+                return True
+            
+            if max_retries > 0 and retry_count >= max_retries:
+                logger.error(f"心跳失败，已重试 {retry_count} 次，退出")
                 return False
-
-        # 激活节点为 ONLINE
-        if not self.activate_online():
-            logger.warning("节点激活失败")
-
-        return self.heartbeat()
+            
+            logger.warning(f"心跳失败，{retry_interval} 秒后重试... ({retry_count})")
+            time.sleep(retry_interval)
 
     def activate_online(self) -> bool:
         """激活节点为 ONLINE 状态"""
@@ -602,14 +635,10 @@ class DCMNodeAgent:
         logger.info(f"Prompt via: {preferred_network.value}")
         logger.info("=" * 50)
 
-        # 确保节点在线
-        if not self.check_node_exists():
-            if not self.register_node():
-                logger.error("节点注册失败,退出")
-                return
-
-        if not self.ensure_online():
-            logger.error("节点上线失败,退出")
+        # 确保节点在线 (无限重试)
+        logger.info("正在连接服务器...")
+        if not self.ensure_online(max_retries=-1):
+            logger.error("无法连接服务器，Agent 退出")
             return
 
         self.running = True
