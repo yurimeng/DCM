@@ -20,6 +20,32 @@ from config import settings
 router = APIRouter(prefix="/internal/v1", tags=["internal"])
 
 
+# ===== 健康检查 =====
+
+@router.get("/health")
+async def health_check():
+    """
+    健康检查端点
+    
+    GET /internal/v1/health
+    
+    用于 Render 健康检查
+    """
+    from ..services import matching_service
+    
+    return {
+        "status": "healthy",
+        "version": "0.1.0",
+        "mvp_mode": True,
+        "services": {
+            "matching": matching_service.get_status(),
+            "online_nodes": len(matching_service._online_nodes),
+        }
+    }
+
+
+
+
 # ===== 请求/响应模型 =====
 
 class ResultSubmitRequest(BaseModel):
