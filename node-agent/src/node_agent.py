@@ -281,11 +281,27 @@ class DCMNodeAgent:
 
             if resp.status_code == 200:
                 data = resp.json()
-                if data.get("matched"):
-                    logger.debug("节点已匹配")
-
+                
+                # 解析心跳数据
+                node_status = data.get("status", "unknown")
+                matched = data.get("matched", False)
+                pre_lock_jobs = data.get("pre_lock_jobs", [])
+                pre_lock_count = data.get("pre_lock_count", 0)
+                timestamp = data.get("timestamp", 0)
+                
                 # 更新网络状态
                 self.network.current_state = NetworkState.ONLINE
+                
+                # 记录心跳数据 (每 10 次心跳记录一次)
+                self._heartbeat_count = getattr(self, '_heartbeat_count', 0) + 1
+                if self._heartbeat_count % 10 == 0:
+                    logger.info(f"💓 心跳 | status={node_status} | matched={matched} | pre_lock={pre_lock_count}")
+                    
+                    # 详细记录 Pre-lock Jobs
+                    if pre_lock_jobs:
+                        for job in pre_lock_jobs:
+                            logger.info(f"   Pre-lock Job: {job['job_id'][:12]}... | model={job.get('model', 'N/A')} | expires={job.get('pre_lock_expires_at', 'N/A')}")
+                
                 return True
             else:
                 logger.warning(f"心跳失败: {resp.status_code}")
