@@ -1,56 +1,57 @@
-# DCM - Decentralized Compute Market
+# DCM - 去中心化算力市场
 
-> A decentralized AI inference marketplace where anyone can buy or sell computing power.
+> Decentralized Compute Market，一个任何人都可以买卖算力的去中心化 AI 推理市场。
 
-## Overview
+## 项目概述
 
-DCM is building a global decentralized AI inference marketplace that enables permissionless participation in GPU compute trading.
+DCM 构建一个全球化的去中心化 AI 推理市场，实现算力的无许可交易。
 
-**Current Phase**: MVP (Validation)
+**当前阶段**：MVP（最小可行产品验证期）
 
-### MVP Validation Goals
+### MVP 验证目标
 
-| Validation Area | Success Criteria |
-|-----------------|------------------|
-| **Technical** | Complete job execution: Submit → Execute → Result → Settlement |
-| **Market** | Price discovery by market forces, not predetermined |
-| **Economics** | Node operators retain earnings, buyers pay less than centralized APIs |
+| 验证领域 | 成功标准 |
+|---------|---------|
+| **技术** | Job 完整跑通：提交 → 执行 → 结果返回 → 结算 |
+| **市场** | 价格由市场机制形成，而非预设 |
+| **经济** | 节点运营商有收益，买家比中心化 API 更便宜 |
 
-## Core Modules (F1-F15)
+## 核心模块 (F1-F15)
 
-### Phase 1: Core Infrastructure (F1-F8)
+### 第一阶段：核心基础设施 (F1-F8)
 
-| Module | Name | Priority |
-|--------|------|----------|
-| F1 | Job Submission & Management | P0 |
-| F2 | Node Registration & Status | P0 |
-| F3 | Matching Engine | P0 |
-| F4 | Retry Mechanism | P0 |
-| F5 | Verification Service | P0 |
-| F6 | Settlement Service | P0 |
-| F7 | Stake Management & Disputes | P1 |
-| F8 | Technical Architecture | P0 |
+| 模块 | 名称 | 优先级 |
+|------|------|-------|
+| F1 | Job 提交与管理系统 | P0 |
+| F2 | 节点注册与状态管理 | P0 |
+| F3 | 撮合引擎 | P0 |
+| F4 | 失败重试机制 | P0 |
+| F5 | 验证服务 | P0 |
+| F6 | 结算服务 | P0 |
+| F7 | Stake 管理与争议处理 | P1 |
+| F8 | 技术架构与数据流 | P0 |
 
-### Phase 2: Network Layer (F9-F15)
+### 第二阶段：网络层 (F9-F15)
 
-| Module | Name | Priority |
-|--------|------|----------|
-| F9 | Core Cluster | P0 |
-| F10 | Scaler | P0 |
-| F11 | Worker Pool | P0 |
-| F13 | P2P Network | P0 |
-| F14 | QUIC Transport | P0 |
-| F15 | Relay Service | P0 |
+| 模块 | 名称 | 优先级 |
+|------|------|-------|
+| F9 | Core Cluster 核心集群 | P0 |
+| F10 | Scaler 自动扩缩容 | P0 |
+| F11 | Worker Pool 工作池 | P0 |
+| F13 | P2P Network 点对点网络 | P0 |
+| F14 | QUIC Transport 传输层 | P0 |
+| F15 | Relay Service 中继服务 | P0 |
 
-## Architecture
+## 架构图
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        API Layer (FastAPI)                   │
+│                        API 层 (FastAPI)                      │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
 │  │   Jobs   │  │  Nodes   │  │  Wallet  │  │  Disputes │  │
+│  │  任务    │  │  节点    │  │  钱包   │  │  争议   │  │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  │
 │       │            │            │            │             │
 │       └────────────┴────────────┴────────────┘             │
@@ -60,7 +61,8 @@ DCM is building a global decentralized AI inference marketplace that enables per
 │       │  ┌──────────┐  ┌──────────┐          │             │
 │       │  │ Scaler   │──│  Worker  │          │             │
 │       │  │  (F10)   │  │  Pool    │          │             │
-│       │  └──────────┘  │  (F11)   │          │             │
+│       │  │  自动扩缩 │  │  (F11)   │          │             │
+│       │  └──────────┘  │  工作池  │          │             │
 │       │                └────┬─────┘          │             │
 │       │                     │                │             │
 │       └─────────────────────┼────────────────┘             │
@@ -70,6 +72,7 @@ DCM is building a global decentralized AI inference marketplace that enables per
 │       │  ┌────────┐  ┌────────┐  ┌────────┐    │        │
 │       │  │  P2P   │──│  QUIC  │──│ Relay  │    │        │
 │       │  │ (F13)  │  │ (F14)  │  │ (F15)  │    │        │
+│       │  │ 点对点 │  │ 传输层 │  │ 中继   │    │        │
 │       │  └────────┘  └────────┘  └────────┘    │        │
 │       └─────────────────────────────────────────┘        │
 │                                                              │
@@ -77,194 +80,195 @@ DCM is building a global decentralized AI inference marketplace that enables per
 │                    Service Layer (F1-F7)                     │
 │  ┌────────────┐  ┌────────────┐  ┌────────────┐            │
 │  │  Matching   │  │ Verification│ │ Settlement │            │
+│  │   撮合引擎  │  │   验证服务  │ │   结算服务  │            │
 │  └────────────┘  └────────────┘  └────────────┘            │
 │                                                              │
 ├─────────────────────────────────────────────────────────────┤
 │                    Blockchain (Solana/Base)                   │
 │  ┌────────────┐  ┌────────────┐                            │
 │  │  Escrow    │  │   Stake    │                            │
-│  │  Contract  │  │  Contract  │                            │
+│  │  托管合约   │  │  质押合约   │                            │
 │  └────────────┘  └────────────┘                            │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Network Redundancy
+## 网络冗余机制
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                   Network Failure Recovery                   │
+│                   网络故障恢复机制                            │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
-│  1. Worker network interruption                              │
+│  1. Worker 网络中断                                          │
 │     ↓                                                        │
 │  2. p2p_connected = False                                   │
 │     ↓                                                        │
-│  3. Heartbeat timeout detection (60s)                        │
+│  3. 心跳超时检测 (60秒)                                       │
 │     ↓                                                        │
-│  4. Auto-reconnect (10s interval)                           │
-│     ├── Try direct connection                                │
-│     └── Fail → Fallback to Relay                            │
+│  4. 自动重连 (10秒间隔)                                       │
+│     ├── 尝试直连                                             │
+│     └── 失败 → 回退到 Relay                                  │
 │     ↓                                                        │
-│  5. Reconnect success → Resume service                      │
-│     OR                                                       │
-│  5. Reconnect fail → retry_count++                           │
+│  5. 重连成功 → 恢复服务                                      │
+│     或                                                       │
+│  5. 重连失败 → retry_count++                                 │
 │     ↓                                                        │
-│  6. retry_count >= 5 → Mark unavailable                     │
+│  6. retry_count >= 5 → 标记为不可用                          │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Tech Stack
+## 技术栈
 
-| Component | Technology |
-|-----------|------------|
-| API Layer | FastAPI (Python 3.11+) |
-| Database | SQLite (MVP) / PostgreSQL (Production) |
-| Settlement Chain | Solana / Base (USDC) |
-| Verification | SHA256 + ROUGE-L |
-| Node Communication | WebSocket + HTTP + QUIC |
-| P2P Network | Custom asyncio implementation |
+| 组件 | 技术 |
+|------|------|
+| API 层 | FastAPI (Python 3.11+) |
+| 数据库 | SQLite (MVP) / PostgreSQL (生产环境) |
+| 结算链 | Solana / Base (USDC) |
+| 验证 | SHA256 + ROUGE-L |
+| 节点通信 | WebSocket + HTTP + QUIC |
+| P2P 网络 | 自定义 asyncio 实现 |
 
-## Project Structure
+## 项目结构
 
 ```
 DCM/
 ├── src/
-│   ├── api/              # API routes
-│   │   ├── core.py       # Core cluster endpoints (F9)
-│   │   ├── scaler.py     # Scaler endpoints (F10)
-│   │   ├── worker_pool.py# Worker pool endpoints (F11)
-│   │   ├── p2p.py        # P2P endpoints (F13)
-│   │   ├── quic.py       # QUIC endpoints (F14)
-│   │   ├── relay.py      # Relay endpoints (F15)
-│   │   ├── jobs.py       # Job endpoints (F1)
-│   │   ├── nodes.py      # Node endpoints (F2)
-│   │   ├── wallet.py     # Wallet endpoints
-│   │   └── disputes.py   # Dispute endpoints (F7)
+│   ├── api/              # API 路由
+│   │   ├── core.py       # 核心集群端点 (F9)
+│   │   ├── scaler.py     # 扩缩容端点 (F10)
+│   │   ├── worker_pool.py# 工作池端点 (F11)
+│   │   ├── p2p.py        # P2P 端点 (F13)
+│   │   ├── quic.py       # QUIC 端点 (F14)
+│   │   ├── relay.py      # 中继端点 (F15)
+│   │   ├── jobs.py       # 任务端点 (F1)
+│   │   ├── nodes.py      # 节点端点 (F2)
+│   │   ├── wallet.py     # 钱包端点
+│   │   └── disputes.py   # 争议端点 (F7)
 │   │
-│   ├── core/             # Core business logic
-│   │   ├── cluster/      # Core cluster services
-│   │   │   ├── cluster_service.py   # Cluster management
-│   │   │   ├── scaler_service.py    # Auto-scaling
-│   │   │   └── worker_pool.py       # Worker pool
-│   │   ├── p2p/          # P2P network (F13)
-│   │   │   ├── p2p_service.py       # P2P implementation
-│   │   │   └── models.py            # P2P models
-│   │   ├── quic/         # QUIC transport (F14)
-│   │   └── relay/        # Relay service (F15)
+│   ├── core/             # 核心业务逻辑
+│   │   ├── cluster/      # 核心集群服务
+│   │   │   ├── cluster_service.py   # 集群管理
+│   │   │   ├── scaler_service.py    # 自动扩缩容
+│   │   │   └── worker_pool.py       # 工作池
+│   │   ├── p2p/          # P2P 网络 (F13)
+│   │   │   ├── p2p_service.py       # P2P 实现
+│   │   │   └── models.py            # P2P 模型
+│   │   ├── quic/         # QUIC 传输 (F14)
+│   │   └── relay/        # 中继服务 (F15)
 │   │
-│   ├── services/         # Service layer (F1-F7)
-│   │   ├── matching.py   # Matching engine
-│   │   ├── verification.py# Verification service
-│   │   ├── escrow.py     # Escrow service
-│   │   ├── stake.py      # Stake management
-│   │   ├── retry.py      # Retry mechanism
-│   │   └── chain_sync.py # Blockchain sync
+│   ├── services/         # 服务层 (F1-F7)
+│   │   ├── matching.py   # 撮合引擎
+│   │   ├── verification.py# 验证服务
+│   │   ├── escrow.py     # 托管服务
+│   │   ├── stake.py      # 质押管理
+│   │   ├── retry.py      # 重试机制
+│   │   └── chain_sync.py # 链上同步
 │   │
-│   ├── models/           # Data models
-│   ├── agents/           # Node Agent client
-│   └── utils/            # Utilities
+│   ├── models/           # 数据模型
+│   ├── agents/           # 节点代理客户端
+│   └── utils/            # 工具函数
 │
 ├── tests/
-│   ├── unit/             # Unit tests
-│   ├── integration/      # Integration tests
-│   └── e2e/              # E2E tests
+│   ├── unit/             # 单元测试
+│   ├── integration/      # 集成测试
+│   └── e2e/              # 端到端测试
 │
-├── contracts/            # Blockchain contracts
-│   ├── Escrow.sol
-│   └── Stake.sol
+├── contracts/            # 区块链合约
+│   ├── Escrow.sol        # 托管合约
+│   └── Stake.sol         # 质押合约
 │
 ├── infra/
-│   ├── docker/           # Docker configs
-│   ├── k8s/              # Kubernetes configs
+│   ├── docker/           # Docker 配置
+│   ├── k8s/              # Kubernetes 配置
 │   ├── cloudrun/         # Google Cloud Run
 │   └── cloudflare/       # Cloudflare Pages
 │
-├── docs/                 # Documentation
-│   └── CHECKPOINTS/      # Development checkpoints
+├── docs/                 # 文档
+│   └── CHECKPOINTS/      # 开发检查点
 │
 └── .github/workflows/    # CI/CD
 ```
 
-## Quick Start
+## 快速开始
 
-### Prerequisites
+### 环境要求
 
 - Python 3.11+
 - SQLite3
 
-### Installation
+### 安装步骤
 
 ```bash
-# Clone repository
+# 克隆仓库
 git clone https://github.com/yurimeng/DCM.git
 cd DCM
 
-# Create virtual environment
+# 创建虚拟环境
 python3 -m venv venv
 source venv/bin/activate  # Linux/Mac
-# or
+# 或
 .\venv\Scripts\activate   # Windows
 
-# Install dependencies
+# 安装依赖
 pip install -r requirements.txt
 
-# Initialize database
+# 初始化数据库
 python scripts/init_db.py
 
-# Start services
+# 启动服务
 uvicorn src.main:app --reload
 ```
 
-### Running Tests
+### 运行测试
 
 ```bash
-# All tests
+# 运行所有测试
 pytest tests/
 
-# Specific module
+# 测试特定模块
 pytest tests/unit/test_p2p/
 pytest tests/unit/test_worker_pool/
 
-# With coverage
+# 带覆盖率
 pytest tests/ --cov=src --cov-report=html
 ```
 
-### Environment Variables
+### 环境变量
 
 ```bash
-# Copy example env
+# 复制示例环境变量文件
 cp .env.example .env
 
-# Edit .env with your configuration
+# 编辑 .env 配置你的参数
 ```
 
-## API Documentation
+## API 文档
 
-Once the server is running, visit:
+服务启动后访问：
 - Swagger UI: http://localhost:8000/docs
 - ReDoc: http://localhost:8000/redoc
 
-### Key Endpoints
+### 主要端点
 
-| Module | Endpoint | Description |
-|--------|----------|-------------|
-| Jobs | `POST /api/v1/jobs` | Submit a job |
-| Jobs | `GET /api/v1/jobs/{id}` | Get job status |
-| Nodes | `POST /api/v1/nodes/register` | Register a node |
-| Workers | `POST /api/v1/workers/register` | Register a worker |
-| Workers | `GET /api/v1/workers/select` | Select worker |
-| Cluster | `GET /api/v1/cluster/status` | Cluster status |
-| P2P | `GET /api/v1/p2p/status` | P2P network status |
+| 模块 | 端点 | 说明 |
+|------|------|------|
+| Jobs | `POST /api/v1/jobs` | 提交任务 |
+| Jobs | `GET /api/v1/jobs/{id}` | 获取任务状态 |
+| Nodes | `POST /api/v1/nodes/register` | 注册节点 |
+| Workers | `POST /api/v1/workers/register` | 注册 Worker |
+| Workers | `GET /api/v1/workers/select` | 选择 Worker |
+| Cluster | `GET /api/v1/cluster/status` | 集群状态 |
+| P2P | `GET /api/v1/p2p/status` | P2P 网络状态 |
 
-## Blockchain Integration
+## 区块链集成
 
-### Contracts
+### 合约
 
-- `contracts/Escrow.sol` - USDC escrow contract
-- `contracts/Stake.sol` - Node stake contract
+- `contracts/Escrow.sol` - USDC 托管合约
+- `contracts/Stake.sol` - 节点质押合约
 
-### Deployment
+### 部署
 
 ```bash
 cd contracts
@@ -272,10 +276,10 @@ npm install
 npx hardhat run scripts/deploy_contracts.js --network mumbai
 ```
 
-### Configuration
+### 配置
 
 ```bash
-# Environment variables
+# 环境变量
 ETH_RPC_URL=https://rpc-mumbai.maticvigil.com
 PRIVATE_KEY=your_key
 ESCROW_CONTRACT_ADDRESS=0x...
@@ -283,7 +287,7 @@ STAKE_CONTRACT_ADDRESS=0x...
 USE_BLOCKCHAIN=true
 ```
 
-## Deployment
+## 部署
 
 ### Docker
 
@@ -303,21 +307,21 @@ docker-compose up -d
 wrangler pages deploy
 ```
 
-## Constraints (Red Lines)
+## 约束规则 (红线)
 
-| Rule | Description |
-|------|-------------|
-| DCM-01 | Stake must be in on-chain contract, never in system account |
-| DCM-02 | No manual node selection, Router matching cannot be干预 |
-| DCM-03 | Layer 1 verification must be online |
-| DCM-04 | Disputes: Freeze without deduction, Buyer not compensated |
+| 规则 | 描述 |
+|------|------|
+| DCM-01 | Stake 必须存在于链上合约，不能进入系统账户 |
+| DCM-02 | 不能人工指定节点，Router 撮合不可干预 |
+| DCM-03 | Layer 1 验证必须在线 |
+| DCM-04 | 争议处理：冻结不扣除，Buyer 不获补偿 |
 
-## Documentation
+## 相关文档
 
 - **PRD**: `DCM/docs/PRD/`
-- **Function Specs**: `DCM/docs/Function/`
-- **Checkpoints**: `DCM/docs/CHECKPOINTS/`
-- **Development**: `DCM/DEVELOPMENT.md`
+- **功能规格**: `DCM/docs/Function/`
+- **检查点**: `DCM/docs/CHECKPOINTS/`
+- **开发指南**: `DCM/DEVELOPMENT.md`
 
 ## License
 
@@ -325,4 +329,4 @@ MIT License
 
 ---
 
-*Document Location: Obsidian Vault `DCM/`*
+*文档位置: Obsidian Vault `DCM/`*
