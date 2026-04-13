@@ -4,19 +4,27 @@ F11: Worker Pool - 无状态 Worker 管理
 
 高度依赖网络状态，与 Scaler 协同工作
 
-集成:
-- P2PService: Worker 网络连接
-- RelayService: Relay 兜底
-- ScalerService: 扩缩协同
+网络冗余机制:
+1. 多 Relay 节点候选
+2. 心跳超时检测
+3. 网络切换 (直连 ↔ Relay)
+4. 离线降级模式
+5. 自动重连
 """
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Callable
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
+
+
+# 默认心跳超时时间 (秒)
+DEFAULT_HEARTBEAT_TIMEOUT_SEC = 60
+# 自动重连间隔 (秒)
+DEFAULT_RECONNECT_INTERVAL_SEC = 10
 
 
 @dataclass
@@ -34,6 +42,13 @@ class Worker:
     # 网络状态
     p2p_connected: bool = False
     relay_node: Optional[str] = None
+    connection_type: str = "unknown"  # direct, relayed, unknown
+    
+    # 冗余机制
+    retry_count: int = 0
+    max_retry_count: int = 5
+    last_reconnect_attempt: Optional[datetime] = None
+    network_failures: int = 0
     
     @property
     def endpoint(self) -> str:
@@ -44,9 +59,23 @@ class Worker:
         return (datetime.utcnow() - self.last_heartbeat).total_seconds()
     
     @property
+    def heartbeat_timeout(self) -> bool:
+        """心跳是否超时"""
+        return self.idle_time_sec > DEFAULT_HEARTBEAT_TIMEOUT_SEC
+    
+    @property
     def is_available(self) -> bool:
-        """Worker 是否可用"""
-        return self.status in ("ready", "busy") and self.p2p_connected
+        """Worker 是否可用 (状态正常 + 网络可达 + 未超时)"""
+        return (
+            self.status in ("ready", "busy") and 
+            self.p2p_connected and 
+            not self.heartbeat_timeout
+        )
+    
+    @property
+    def can_retry(self) -> bool:
+        """是否可以重试"""
+        return self.retry_count < self.max_retry_count
 
 
 class WorkerPoolService:
@@ -59,10 +88,12 @@ class WorkerPoolService:
     3. 平滑下线
     4. 状态同步
     
-    集成:
+    网络冗余机制:
     - P2PService: Worker 网络连接状态
     - RelayService: Relay 兜底状态
     - ScalerService: 扩缩触发
+    - 心跳超时检测
+    - 自动重连
     """
     
     def __init__(self):
@@ -73,13 +104,23 @@ class WorkerPoolService:
         self._on_worker_create: Optional[Callable] = None
         self._on_worker_destroy: Optional[Callable] = None
         self._on_worker_scaled: Optional[Callable] = None
+        self._on_worker_unavailable: Optional[Callable] = None
         
-        # P2P 和 Relay 服务引用 (由外部设置)
+        # P2P 和 Relay 服务引用
         self._p2p_service = None
         self._relay_service = None
         self._scaler_service = None
         
-        logger.info("WorkerPoolService initialized")
+        # 后台任务
+        self._running = False
+        self._cleanup_task: Optional[asyncio.Task] = None
+        self._reconnect_task: Optional[asyncio.Task] = None
+        
+        # 配置
+        self._heartbeat_timeout_sec = DEFAULT_HEARTBEAT_TIMEOUT_SEC
+        self._reconnect_interval_sec = DEFAULT_RECONNECT_INTERVAL_SEC
+        
+        logger.info("WorkerPoolService initialized with network redundancy")
     
     def set_p2p_service(self, p2p_service):
         """设置 P2P 服务"""
@@ -92,6 +133,149 @@ class WorkerPoolService:
     def set_scaler_service(self, scaler_service):
         """设置 Scaler 服务"""
         self._scaler_service = scaler_service
+    
+    # ==================== 生命周期 ====================
+    
+    async def start(self):
+        """启动 Worker Pool"""
+        self._running = True
+        self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+        self._reconnect_task = asyncio.create_task(self._reconnect_loop())
+        logger.info("WorkerPool started with network redundancy")
+    
+    async def stop(self):
+        """停止 Worker Pool"""
+        self._running = False
+        
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+        if self._reconnect_task:
+            self._reconnect_task.cancel()
+        
+        logger.info("WorkerPool stopped")
+    
+    # ==================== 后台任务 ====================
+    
+    async def _cleanup_loop(self):
+        """
+        清理循环
+        
+        检测心跳超时的 Worker 并标记为不可用
+        """
+        while self._running:
+            try:
+                await asyncio.sleep(10)  # 每 10 秒检查一次
+                await self._check_heartbeat_timeout()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Cleanup loop error: {e}")
+    
+    async def _check_heartbeat_timeout(self):
+        """检查心跳超时"""
+        async with self._lock:
+            now = datetime.utcnow()
+            timeout_workers = []
+            
+            for worker_id, worker in self._workers.items():
+                if worker.status in ("ready", "busy"):
+                    idle = (now - worker.last_heartbeat).total_seconds()
+                    
+                    if idle > self._heartbeat_timeout_sec:
+                        # 标记为不可用，但不立即移除
+                        if worker.p2p_connected:
+                            logger.warning(
+                                f"Worker {worker_id} heartbeat timeout: {idle:.1f}s"
+                            )
+                            worker.p2p_connected = False
+                            worker.network_failures += 1
+                            
+                            # 触发不可用回调
+                            if self._on_worker_unavailable:
+                                try:
+                                    await self._on_worker_unavailable(worker_id, "timeout")
+                                except Exception as e:
+                                    logger.error(f"Worker unavailable callback failed: {e}")
+                        
+                        # 连续超时次数过多，移除 Worker
+                        if worker.network_failures >= 3:
+                            timeout_workers.append(worker_id)
+            
+            # 移除连续超时的 Worker
+            for worker_id in timeout_workers:
+                del self._workers[worker_id]
+                logger.error(f"Worker removed due to heartbeat timeout: {worker_id}")
+    
+    async def _reconnect_loop(self):
+        """
+        重连循环
+        
+        尝试重连不可用的 Worker
+        """
+        while self._running:
+            try:
+                await asyncio.sleep(self._reconnect_interval_sec)
+                await self._try_reconnect_workers()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Reconnect loop error: {e}")
+    
+    async def _try_reconnect_workers(self):
+        """尝试重连不可用的 Worker"""
+        async with self._lock:
+            for worker_id, worker in self._workers.items():
+                if not worker.p2p_connected and worker.can_retry:
+                    # 检查是否到了重连时间
+                    if worker.last_reconnect_attempt:
+                        elapsed = (
+                            datetime.utcnow() - worker.last_reconnect_attempt
+                        ).total_seconds()
+                        if elapsed < self._reconnect_interval_sec:
+                            continue
+                    
+                    # 尝试重连
+                    worker.last_reconnect_attempt = datetime.utcnow()
+                    worker.retry_count += 1
+                    
+                    logger.info(
+                        f"Attempting to reconnect worker: {worker_id} "
+                        f"(attempt {worker.retry_count}/{worker.max_retry_count})"
+                    )
+                    
+                    # 尝试通过 Relay 重连
+                    if self._relay_service:
+                        try:
+                            # 获取可用的 Relay 节点
+                            relay_node = await self._relay_service.get_available_relay_node()
+                            if relay_node:
+                                # 通过 Relay 连接
+                                await self._p2p_service.connect_peer(
+                                    worker_id, 
+                                    relay_node=relay_node.peer_id
+                                )
+                                worker.relay_node = relay_node.peer_id
+                                worker.connection_type = "relayed"
+                                logger.info(
+                                    f"Worker {worker_id} reconnected via relay: "
+                                    f"{relay_node.peer_id[:12]}"
+                                )
+                        except Exception as e:
+                            logger.error(f"Relay reconnect failed: {e}")
+                    
+                    # 如果 Relay 也失败，尝试直连
+                    if not worker.p2p_connected:
+                        try:
+                            await self._p2p_service.connect_peer(worker_id)
+                            worker.connection_type = "direct"
+                            logger.info(f"Worker {worker_id} reconnected directly")
+                        except Exception as e:
+                            logger.error(f"Direct reconnect failed: {e}")
+                    
+                    # 更新连接状态
+                    if worker.p2p_connected:
+                        worker.retry_count = 0
+                        worker.network_failures = 0
     
     # ==================== Worker 管理 ====================
     
@@ -115,13 +299,30 @@ class WorkerPoolService:
             # 注册到 P2P 网络
             if self._p2p_service:
                 try:
-                    await self._p2p_service.add_peer(
-                        peer_id=worker_id,
-                        addresses=[f"/ip4/{address}/tcp/{port}"],
-                        is_relay=False
-                    )
-                    worker.p2p_connected = True
-                    logger.info(f"Worker registered to P2P: {worker_id}")
+                    # 尝试直连
+                    connected = await self._p2p_service.connect_peer(worker_id)
+                    
+                    if connected:
+                        worker.p2p_connected = True
+                        worker.connection_type = "direct"
+                        logger.info(f"Worker registered to P2P (direct): {worker_id}")
+                    else:
+                        # 直连失败，尝试 Relay
+                        if self._relay_service:
+                            relay_node = await self._relay_service.get_available_relay_node()
+                            if relay_node:
+                                connected = await self._p2p_service.connect_peer(
+                                    worker_id,
+                                    relay_node=relay_node.peer_id
+                                )
+                                if connected:
+                                    worker.p2p_connected = True
+                                    worker.relay_node = relay_node.peer_id
+                                    worker.connection_type = "relayed"
+                                    logger.info(
+                                        f"Worker registered to P2P (relayed): {worker_id} "
+                                        f"via {relay_node.peer_id[:12]}"
+                                    )
                 except Exception as e:
                     logger.error(f"Failed to register worker to P2P: {e}")
             
@@ -132,7 +333,7 @@ class WorkerPoolService:
         """
         Worker 心跳
         
-        同时更新网络状态
+        同时更新网络状态和重置超时计数
         """
         async with self._lock:
             worker = self._workers.get(worker_id)
@@ -144,13 +345,20 @@ class WorkerPoolService:
             worker.status = status
             worker.current_requests = current_requests
             
-            # 检查网络状态
+            # 如果之前不可用，现在恢复，重置计数
+            if not worker.p2p_connected:
+                worker.p2p_connected = True
+                worker.retry_count = 0
+                worker.network_failures = 0
+                logger.info(f"Worker {worker_id} recovered from network failure")
+            
+            # 更新网络诊断
             if self._relay_service:
                 try:
                     diagnostics = await self._relay_service.diagnose_connection(worker_id)
                     if diagnostics:
                         worker.relay_node = diagnostics.get("relay_node")
-                        worker.p2p_connected = diagnostics.get("connection_type") != "unknown"
+                        worker.connection_type = diagnostics.get("connection_type", "unknown")
                 except Exception as e:
                     logger.debug(f"Network diagnostics failed: {e}")
             
@@ -173,12 +381,12 @@ class WorkerPoolService:
         """获取可用的 Worker (网络可达)"""
         return [w for w in self._workers.values() if w.p2p_connected]
     
+    async def get_unavailable_workers(self) -> List[Worker]:
+        """获取不可用的 Worker (网络不可达)"""
+        return [w for w in self._workers.values() if not w.p2p_connected]
+    
     async def remove_worker(self, worker_id: str) -> bool:
-        """
-        移除 Worker
-        
-        同时从 P2P 网络移除
-        """
+        """移除 Worker"""
         async with self._lock:
             if worker_id in self._workers:
                 worker = self._workers[worker_id]
@@ -211,8 +419,11 @@ class WorkerPoolService:
                 logger.info("No ready workers, triggering scale up")
                 await self._scaler_service.scale_up(1)
             
-            logger.warning("No ready workers available")
-            return None
+            # 再试一次
+            ready_workers = await self.get_ready_workers()
+            if not ready_workers:
+                logger.warning("No ready workers available")
+                return None
         
         # 最少连接优先
         return min(ready_workers, key=lambda w: w.current_requests)
@@ -230,11 +441,6 @@ class WorkerPoolService:
             
             worker.current_requests += 1
             worker.status = "busy"
-            
-            # 通知 Scaler 有新请求
-            if self._scaler_service:
-                # 可以记录请求增加，用于扩缩决策
-                pass
             
             return True
     
@@ -256,16 +462,7 @@ class WorkerPoolService:
     # ==================== 平滑下线 ====================
     
     async def drain_worker(self, worker_id: str) -> bool:
-        """
-        平滑下线 Worker
-        
-        流程:
-        1. 标记为 draining
-        2. 停止接受新请求
-        3. 等待现有请求完成
-        4. 调用销毁回调
-        5. 从 P2P 网络移除
-        """
+        """平滑下线 Worker"""
         async with self._lock:
             worker = self._workers.get(worker_id)
             if not worker:
@@ -298,14 +495,8 @@ class WorkerPoolService:
                         except Exception as e:
                             logger.error(f"Failed to disconnect worker: {e}")
                     
-                    # 移除
                     del self._workers[worker_id]
                     logger.info(f"Worker stopped: {worker_id}")
-                    
-                    # 通知 Scaler Worker 已下线
-                    if self._scaler_service:
-                        logger.info(f"Worker {worker_id} stopped, updating scaler")
-                    
                     return True
                 
                 # 超时 60s 强制销毁
@@ -330,15 +521,9 @@ class WorkerPoolService:
     # ==================== Scaler 协同 ====================
     
     async def create_worker_for_scaler(self) -> Optional[str]:
-        """
-        为 Scaler 创建 Worker
-        
-        Returns:
-            Worker ID 或 None
-        """
+        """为 Scaler 创建 Worker"""
         worker_id = f"worker-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}-{len(self._workers)}"
         
-        # 获取可用地址 (这里简化处理，实际应该从 Core 节点列表选择)
         if self._p2p_service:
             try:
                 status = self._p2p_service.get_status()
@@ -356,9 +541,7 @@ class WorkerPoolService:
         return None
     
     async def destroy_worker_for_scaler(self, worker_id: str):
-        """
-        为 Scaler 销毁 Worker
-        """
+        """为 Scaler 销毁 Worker"""
         await self.drain_worker(worker_id)
     
     # ==================== 状态查询 ====================
@@ -377,8 +560,10 @@ class WorkerPoolService:
         # 网络状态统计
         network_stats = {
             "p2p_connected": sum(1 for w in workers if w.p2p_connected),
-            "via_relay": sum(1 for w in workers if w.relay_node),
+            "via_direct": sum(1 for w in workers if w.connection_type == "direct"),
+            "via_relay": sum(1 for w in workers if w.connection_type == "relayed"),
             "unavailable": sum(1 for w in workers if not w.p2p_connected),
+            "retrying": sum(1 for w in workers if w.retry_count > 0),
         }
         
         return {
@@ -403,8 +588,11 @@ class WorkerPoolService:
                 "current_requests": w.current_requests,
                 "completed_requests": w.completed_requests,
                 "p2p_connected": w.p2p_connected,
+                "connection_type": w.connection_type,
                 "relay_node": w.relay_node,
                 "is_available": w.is_available,
+                "retry_count": w.retry_count,
+                "network_failures": w.network_failures,
             }
             for w in self._workers.values()
         ]
