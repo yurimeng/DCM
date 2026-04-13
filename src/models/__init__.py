@@ -3,6 +3,14 @@ Models - DCM v3.1
 导出所有模型
 """
 
+# Database models (for SQLAlchemy)
+from .db_models import (
+    JobDB, NodeDB, MatchDB, EscrowDB,
+    StakeRecordDB, DisputeDB, AppealDB,
+    WalletAccountDB, WalletTransactionDB,
+    JobStatusDB, NodeStatusDB, EscrowStatusDB, NodeTierDB,
+)
+
 # Job models
 from .job import Job, JobStatus, JobCreate, JobResponse, JobQuery
 
@@ -30,6 +38,20 @@ from .runtime import Runtime, RuntimeType, RuntimeStatus
 from .escrow import Escrow, EscrowStatus, SettlementRequest
 
 __all__ = [
+    # Database Models
+    "JobDB",
+    "NodeDB",
+    "MatchDB",
+    "EscrowDB",
+    "StakeRecordDB",
+    "DisputeDB",
+    "AppealDB",
+    "WalletAccountDB",
+    "WalletTransactionDB",
+    "JobStatusDB",
+    "NodeStatusDB",
+    "EscrowStatusDB",
+    "NodeTierDB",
     # Job
     "Job",
     "JobStatus", 
