@@ -114,16 +114,17 @@ async def node_online(
     if not db_node:
         raise HTTPException(status_code=404, detail="Node not found")
     
-    # 检查 Stake 是否足够
-    stake_record = db.query(StakeRecordDB).filter(
-        StakeRecordDB.node_id == node_id
-    ).first()
-    
-    if not stake_record or stake_record.status != "active":
-        raise HTTPException(
-            status_code=400,
-            detail="Stake not deposited or frozen"
-        )
+    # MVP 模式: stake_required 为 0 时跳过 stake 检查
+    if db_node.stake_required > 0:
+        stake_record = db.query(StakeRecordDB).filter(
+            StakeRecordDB.node_id == node_id
+        ).first()
+        
+        if not stake_record or stake_record.status != "active":
+            raise HTTPException(
+                status_code=400,
+                detail="Stake not deposited or frozen"
+            )
     
     # 更新数据库
     node_repo.update(node_id, status=NodeStatus.ONLINE)
