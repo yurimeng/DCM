@@ -118,6 +118,11 @@ class Job(JobCreate):
         """是否可以重试"""
         return self.retry_count < self.max_retries and self.status == JobStatus.FAILED
     
+    @property
+    def model(self) -> Optional[str]:
+        """兼容属性: 返回 model_requirement"""
+        return self.model_requirement
+    
     def pre_lock_expired(self) -> bool:
         """Pre-Lock 是否过期"""
         if self.pre_lock_expires_at is None:
