@@ -292,15 +292,15 @@ class DCMNodeAgent:
                 # 更新网络状态
                 self.network.current_state = NetworkState.ONLINE
                 
-                # 记录心跳数据 (每 10 次心跳记录一次)
+                # 记录心跳数据 (每 3 次心跳记录一次，约 90 秒)
                 self._heartbeat_count = getattr(self, '_heartbeat_count', 0) + 1
-                if self._heartbeat_count % 10 == 0:
-                    logger.info(f"💓 心跳 | status={node_status} | matched={matched} | pre_lock={pre_lock_count}")
+                if self._heartbeat_count % 3 == 0:
+                    logger.info(f"💓 心跳 #{self._heartbeat_count} | status={node_status} | matched={matched} | pre_lock={pre_lock_count}")
                     
                     # 详细记录 Pre-lock Jobs
                     if pre_lock_jobs:
                         for job in pre_lock_jobs:
-                            logger.info(f"   Pre-lock Job: {job['job_id'][:12]}... | model={job.get('model', 'N/A')} | expires={job.get('pre_lock_expires_at', 'N/A')}")
+                            logger.info(f"   📌 Pre-lock: {job['job_id'][:12]}... | prompt={job.get('prompt', 'N/A')[:20]}... | expires={job.get('pre_lock_expires_at', 'N/A')}")
                 
                 return True
             else:
