@@ -279,8 +279,14 @@ async def submit_result(
             original_result=result_submit.result,
         )
     
-    # 更新 Job 状态
-    job_repo.update(job_id, status="completed")
+    # 保存结果到数据库
+    job_repo.update(job_id, 
+        status="completed",
+        result=result_submit.result,
+        actual_output_tokens=result_submit.actual_output_tokens,
+        actual_latency_ms=result_submit.actual_latency_ms,
+        completed_at=datetime.utcnow()
+    )
     
     response = {
         "received": True,
