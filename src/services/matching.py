@@ -204,7 +204,7 @@ class MatchingService:
             job_id=job.job_id,
             node_id=node.node_id,
             locked_price=locked_price,
-            used_model=used_model,
+            model=used_model,
         )
         
         # 更新状态

@@ -28,16 +28,16 @@ class Match(BaseModel):
     
     # 核心关联
     job_id: str = Field(..., description="Job ID")
-    slot_id: str = Field(..., description="Slot ID")
+    slot_id: str = Field(default_factory=lambda: f"slot_{uuid.uuid4().hex[:8]}", description="Slot ID")
     node_id: str = Field(..., description="Node ID")
-    worker_id: str = Field(..., description="Worker ID")
+    worker_id: str = Field(default_factory=lambda: f"worker_{uuid.uuid4().hex[:8]}", description="Worker ID")
     
     # 定价
     locked_price: float = Field(..., description="锁定价格")
     matched_at: datetime = Field(default_factory=datetime.utcnow)
     
     # 模型
-    model: str = Field(..., description="实际使用的模型")
+    model: str = Field(default="qwen2.5:7b", description="实际使用的模型")
     
     # 执行结果
     result_hash: Optional[str] = None
