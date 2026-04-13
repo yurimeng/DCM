@@ -232,15 +232,3 @@ async def get_job_stats(db: Session = Depends(get_db)):
         "pending_in_queue": matching_service.get_pending_jobs_count(),
     }
 
-
-@router.get("/debug/db-status")
-async def debug_db_status(db: Session = Depends(get_db)):
-    """调试端点: 检查数据库状态"""
-    from ..models.db_models import JobDB, EscrowDB, MatchDB, NodeDB
-    
-    return {
-        "jobs": db.query(JobDB).count(),
-        "escrows": db.query(EscrowDB).count(),
-        "matches": db.query(MatchDB).count(),
-        "nodes": db.query(NodeDB).count(),
-    }
