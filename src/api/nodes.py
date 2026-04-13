@@ -431,6 +431,21 @@ async def node_heartbeat(
     # 更新心跳时间
     node_repo.update_heartbeat(node_id)
     
+    # 同步到 matching_service 内存状态
+    if db_node.status == NodeStatusDB.ONLINE:
+        from ..models import Node
+        node = Node(
+            node_id=db_node.node_id,
+            gpu_type=db_node.gpu_type,
+            vram_gb=db_node.vram_gb,
+            model_support=json.loads(db_node.model_support) if db_node.model_support else [],
+            ask_price=float(db_node.ask_price),
+            avg_latency=int(db_node.avg_latency),
+            region=db_node.region,
+        )
+        matching_service.register_node(node)
+        matching_service.update_node_status(node_id, NodeStatus.ONLINE)
+    
     return {
         "node_id": node_id,
         "status": heartbeat_data.get("status", "idle"),
