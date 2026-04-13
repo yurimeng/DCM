@@ -361,10 +361,10 @@ async def submit_layer2_result_endpoint(
 
 
 # ===== 结算接口 =====
-
-@router.post("/settlement/execute", response_model=SettlementResponse)
+import logging
 logger = logging.getLogger(__name__)
 
+@router.post("/settlement/execute", response_model=SettlementResponse)
 async def execute_settlement_endpoint(
     request: SettlementRequest,
     db: Session = Depends(get_db)
