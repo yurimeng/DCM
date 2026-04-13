@@ -99,12 +99,13 @@ class P2PConfig:
 @dataclass
 class P2PMetrics:
     """P2P 指标"""
-    connected_peers: int = 0
+    connections_established: int = 0
+    connections_failed: int = 0
+    direct_connections: int = 0
     relayed_connections: int = 0
+    direct_fallback_count: int = 0
     messages_sent: int = 0
     messages_received: int = 0
-    broadcast_latency_ms: float = 0.0
-    last_broadcast: Optional[datetime] = None
 
 
 # 预定义 topic

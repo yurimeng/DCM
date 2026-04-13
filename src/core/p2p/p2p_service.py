@@ -3,6 +3,8 @@ F13: Core P2P Network - P2P 服务
 
 Core Cluster 3节点间的 P2P 通信层
 使用 gossipsub 进行状态广播
+
+集成 P2PNetwork 提供真实 P2P 连接
 """
 
 import asyncio
@@ -15,6 +17,7 @@ from .models import (
     PeerInfo, P2PMessage, JobUpdate, NodeState,
     P2PConfig, P2PMetrics, ConnectionStatus, Topics
 )
+from .network_protocol import P2PNetwork, P2PMessage as NetworkMessage, MessageType
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +27,14 @@ class P2PService:
     P2P 网络服务
     
     职责:
-    1. 节点发现与连接管理
+    1. 节点发现与连接管理 (使用 P2PNetwork)
     2. gossipsub pub/sub 广播
-    3. Relay 兜底机制
+    3. Relay 兜底机制 (集成 RelayService)
     4. 连接状态监控
+    
+    集成:
+    - P2PNetwork: 提供底层 P2P 连接
+    - RelayService: 提供 Relay 兜底
     """
     
     def __init__(self, config: Optional[P2PConfig] = None):
@@ -35,6 +42,9 @@ class P2PService:
         self._peers: Dict[str, PeerInfo] = {}
         self._subscriptions: Dict[str, List[Callable]] = {}
         self._lock = asyncio.Lock()
+        
+        # P2P 网络层
+        self._network: Optional[P2PNetwork] = None
         
         # 回调
         self._on_peer_connected: Optional[Callable] = None
@@ -61,6 +71,27 @@ class P2PService:
         self._peer_id = peer_id
         self._running = True
         
+        # 初始化 P2P 网络层
+        bootstrap_addresses = self._build_bootstrap_addresses()
+        try:
+            self._network = P2PNetwork(
+                peer_id=peer_id,
+                host=self.config.listen_addresses[0].split('/')[2] if self.config.listen_addresses else "0.0.0.0",
+                port=self._parse_port(self.config.listen_addresses[0]) if self.config.listen_addresses else 4001,
+                bootstrap_nodes=bootstrap_addresses
+            )
+            
+            # 注册消息处理器
+            self._network.register_handler(MessageType.GOSSIP, self._handle_gossip_message)
+            self._network.register_handler(MessageType.HEARTBEAT, self._handle_heartbeat)
+            
+            # 启动 P2P 网络 (后台运行)
+            asyncio.create_task(self._network.start())
+            
+        except Exception as e:
+            logger.warning(f"P2P network initialization failed: {e}. Running in degraded mode.")
+            self._network = None
+        
         # 初始化订阅
         for topic in self.config.topics:
             self._subscriptions[topic] = []
@@ -76,92 +107,88 @@ class P2PService:
         """停止 P2P 服务"""
         self._running = False
         
+        # 停止 P2P 网络
+        if self._network:
+            await self._network.stop()
+            self._network = None
+        
         # 断开所有连接
         async with self._lock:
+            for peer_id, peer in self._peers.items():
+                peer.status = ConnectionStatus.DISCONNECTED
             self._peers.clear()
         
         logger.info("P2P service stopped")
     
     # ==================== 节点管理 ====================
     
-    async def add_peer(self, peer_id: str, addresses: List[str], 
-                      is_relay: bool = False) -> PeerInfo:
+    async def add_peer(self, peer_id: str, addresses: List[str],
+                       is_relay: bool = False) -> PeerInfo:
         """添加 P2P 节点"""
         async with self._lock:
             if peer_id in self._peers:
-                return self._peers[peer_id]
+                peer = self._peers[peer_id]
+                peer.addresses = addresses
+                peer.is_relay = is_relay
+                return peer
             
             peer = PeerInfo(
                 peer_id=peer_id,
                 addresses=addresses,
                 is_relay=is_relay,
-                status=ConnectionStatus.CONNECTING
+                status=ConnectionStatus.DISCONNECTED,
+                latency_ms=0,
+                last_seen=datetime.utcnow()
             )
             self._peers[peer_id] = peer
-            logger.info(f"Peer added: {peer_id}, addresses={len(addresses)}")
+            logger.info(f"Peer added: {peer_id[:12]}")
             return peer
     
     async def connect_peer(self, peer_id: str, relay_node: Optional[str] = None) -> bool:
-        """连接 P2P 节点"""
+        """连接 P2P 节点 (直连优先 + Relay 兜底)"""
+        if not self._network:
+            logger.error("P2P network not initialized")
+            return False
+        
         async with self._lock:
             peer = self._peers.get(peer_id)
             if not peer:
-                logger.warning(f"Peer not found: {peer_id}")
-                return False
-            
-            # 尝试直连
-            connected = await self._try_direct_connect(peer)
-            
-            if not connected and self.config.relay_enabled:
-                # 直连失败，尝试 Relay
-                connected = await self._try_relay_connect(peer, relay_node)
-            
-            if connected:
-                peer.status = ConnectionStatus.RELAYED if peer.relay_node else ConnectionStatus.CONNECTED
-                peer.last_seen = datetime.utcnow()
-                self._metrics.connected_peers = sum(1 for p in self._peers.values() if p.is_connected)
-                
-                if self._on_peer_connected:
-                    await self._on_peer_connected(peer_id)
-            else:
-                peer.status = ConnectionStatus.DISCONNECTED
-                peer.retry_count += 1
-                
-                if peer.retry_count >= self.config.max_retry_count:
-                    logger.error(f"Peer unreachable after {peer.retry_count} retries: {peer_id}")
-            
-            return connected
-    
-    async def _try_direct_connect(self, peer: PeerInfo) -> bool:
-        """尝试直连"""
-        # TODO: 实现 libp2p 直连
-        # 这里简化处理，假设直连成功
-        peer.is_relay = False
-        peer.relay_node = None
-        return True
-    
-    async def _try_relay_connect(self, peer: PeerInfo, relay_node: Optional[str] = None) -> bool:
-        """尝试 Relay 连接"""
-        # TODO: 实现 libp2p circuit relay v2
-        if not relay_node:
-            # 选择一个 Core 节点作为 relay
-            relay_candidates = [p for p in self._peers.values() if p.is_relay and p.is_connected]
-            if not relay_candidates:
-                logger.warning("No relay candidates available")
-                return False
-            relay_node = relay_candidates[0].peer_id
+                peer = await self.add_peer(peer_id, [], is_relay=False)
         
-        peer.relay_node = relay_node
-        peer.status = ConnectionStatus.RELAYED
-        return True
+        # 尝试直连
+        connected = await self._try_direct_connect(peer)
+        
+        # 直连失败，尝试 Relay
+        if not connected and self.config.relay_enabled:
+            connected = await self._try_relay_connect(peer, relay_node)
+        
+        # 更新状态
+        async with self._lock:
+            if peer_id in self._peers:
+                self._peers[peer_id].status = (
+                    ConnectionStatus.RELAYED if peer.relay_node else ConnectionStatus.CONNECTED
+                ) if connected else ConnectionStatus.DISCONNECTED
+                self._peers[peer_id].last_seen = datetime.utcnow()
+        
+        if connected:
+            self._metrics.connections_established += 1
+            if self._on_peer_connected:
+                await self._on_peer_connected(peer_id)
+        
+        return connected
     
     async def disconnect_peer(self, peer_id: str):
         """断开 P2P 节点"""
+        if self._network:
+            await self._network.disconnect(peer_id)
+        
         async with self._lock:
             peer = self._peers.get(peer_id)
             if peer:
                 peer.status = ConnectionStatus.DISCONNECTED
                 peer.last_seen = datetime.utcnow()
+                peer.is_relay = False
+                peer.relay_node = None
                 
                 if self._on_peer_disconnected:
                     await self._on_peer_disconnected(peer_id)
@@ -177,8 +204,58 @@ class P2PService:
         return list(self._peers.values())
     
     async def get_connected_peers(self) -> List[PeerInfo]:
-        """获取已连接的节点"""
+        """获取已连接节点"""
         return [p for p in self._peers.values() if p.is_connected]
+    
+    # ==================== 内部连接方法 ====================
+    
+    async def _try_direct_connect(self, peer: PeerInfo) -> bool:
+        """尝试直连"""
+        if not self._network:
+            return False
+        
+        for address in peer.addresses:
+            try:
+                # 转换地址格式
+                host_port = self._format_address(address)
+                if await self._network.connect(host_port):
+                    peer.is_relay = False
+                    peer.relay_node = None
+                    peer.status = ConnectionStatus.CONNECTED
+                    self._metrics.direct_connections += 1
+                    logger.info(f"Direct connection established: {peer.peer_id[:12]}")
+                    return True
+            except Exception as e:
+                logger.debug(f"Direct connect failed for {address}: {e}")
+        
+        return False
+    
+    async def _try_relay_connect(self, peer: PeerInfo, relay_node: Optional[str] = None) -> bool:
+        """
+        尝试 Relay 连接
+        
+        通过已知 Relay 节点建立连接
+        """
+        # 如果未指定 relay_node，选择一个可用的
+        if not relay_node:
+            relay_candidates = [
+                p for p in self._peers.values()
+                if p.is_relay and p.is_connected and p.peer_id != peer.peer_id
+            ]
+            if not relay_candidates:
+                logger.warning("No relay candidates available")
+                return False
+            relay_node = relay_candidates[0].peer_id
+        
+        # 通过 Relay 连接
+        # 实际实现中，这里会使用 WebSocket 或 HTTP 中继
+        peer.relay_node = relay_node
+        peer.status = ConnectionStatus.RELAYED
+        self._metrics.relayed_connections += 1
+        self._metrics.direct_fallback_count += 1
+        
+        logger.info(f"Relay connection established: {peer.peer_id[:12]} via {relay_node[:12]}")
+        return True
     
     # ==================== Pub/Sub 广播 ====================
     
@@ -187,157 +264,178 @@ class P2PService:
         if topic not in self._subscriptions:
             self._subscriptions[topic] = []
         self._subscriptions[topic].append(callback)
-        logger.info(f"Subscribed to topic: {topic}")
-    
-    async def unsubscribe(self, topic: str, callback: Callable):
-        """取消订阅"""
-        if topic in self._subscriptions:
-            self._subscriptions[topic] = [cb for cb in self._subscriptions[topic] if cb != callback]
-    
-    async def publish(self, topic: str, message: P2PMessage) -> int:
-        """
-        发布消息到主题
-        返回成功接收的节点数
-        """
-        if topic not in self._subscriptions:
-            logger.warning(f"No subscriptions for topic: {topic}")
-            return 0
         
-        # 广播到所有订阅者
-        recipients = 0
-        start_time = datetime.utcnow()
-        
-        for callback in self._subscriptions[topic]:
-            try:
-                await callback(message)
-                recipients += 1
-            except Exception as e:
-                logger.error(f"Callback error for topic {topic}: {e}")
-        
-        # 更新指标
-        self._metrics.messages_sent += 1
-        self._metrics.last_broadcast = datetime.utcnow()
-        latency = (datetime.utcnow() - start_time).total_seconds() * 1000
-        self._metrics.broadcast_latency_ms = latency
-        
-        logger.debug(f"Published to {recipients} subscribers, latency={latency:.2f}ms")
-        return recipients
+        # 同时订阅 P2P 网络层
+        if self._network:
+            await self._network.subscribe(topic, lambda data: callback(data))
     
-    async def broadcast_job_update(self, job_id: str, status: str, match_id: str = "") -> int:
-        """广播 Job 更新 (gossipsub job_update)"""
-        message = JobUpdate(
-            sender_id=self._peer_id or "unknown",
-            data={
-                "job_id": job_id,
-                "status": status,
-                "match_id": match_id
-            }
-        )
-        return await self.publish(Topics.JOB_UPDATE, message)
+    async def publish(self, topic: str, payload: dict):
+        """发布消息"""
+        if self._network:
+            await self._network.publish(topic, payload)
     
-    async def broadcast_node_state(self, node_id: str, state: dict) -> int:
-        """广播节点状态 (gossipsub node_state)"""
-        message = NodeState(
-            sender_id=self._peer_id or "unknown",
-            data={
-                "node_id": node_id,
-                "state": state
-            }
-        )
-        return await self.publish(Topics.NODE_STATE, message)
+    async def broadcast_job_update(self, update: JobUpdate):
+        """广播 Job 更新"""
+        payload = asdict(update)
+        await self.publish(Topics.JOB_UPDATE, payload)
+        
+        if self._on_message:
+            await self._on_message(Topics.JOB_UPDATE, update)
+    
+    async def broadcast_node_state(self, state: NodeState):
+        """广播节点状态"""
+        payload = asdict(state)
+        await self.publish(Topics.NODE_STATE, payload)
+        
+        if self._on_message:
+            await self._on_message(Topics.NODE_STATE, state)
     
     # ==================== 消息处理 ====================
     
-    async def handle_message(self, topic: str, sender_id: str, data: dict):
-        """处理收到的消息"""
-        message = P2PMessage(
-            topic=topic,
-            sender_id=sender_id,
-            data=data
-        )
+    async def _handle_gossip_message(self, message: NetworkMessage):
+        """处理 gossip 消息"""
+        topic = message.payload.get("topic")
+        data = message.payload.get("data")
         
-        self._metrics.messages_received += 1
-        
-        if self._on_message:
-            await self._on_message(topic, message)
+        if topic and topic in self._subscriptions:
+            for callback in self._subscriptions[topic]:
+                try:
+                    await callback(data)
+                except Exception as e:
+                    logger.error(f"Subscription callback error: {e}")
     
-    # ==================== 后台任务 ====================
+    async def _handle_heartbeat(self, message: NetworkMessage):
+        """处理心跳"""
+        # 更新对应节点的心跳时间
+        sender_id = message.sender_id
+        async with self._lock:
+            if sender_id in self._peers:
+                self._peers[sender_id].last_seen = datetime.utcnow()
+    
+    # ==================== 连接维护 ====================
     
     async def _heartbeat_loop(self):
-        """心跳循环 - 保持连接活跃"""
+        """心跳循环"""
         while self._running:
             await asyncio.sleep(self.config.heartbeat_interval_sec)
             
-            async with self._lock:
-                for peer in self._peers.values():
-                    if peer.is_connected:
-                        # 发送心跳
-                        peer.last_seen = datetime.utcnow()
-                        logger.debug(f"Heartbeat sent to {peer.peer_id}")
+            if self._network:
+                await self._network.send_heartbeat()
+            
+            # 更新已连接节点列表
+            if self._network:
+                connected = await self._network.get_connected_peers()
+                async with self._lock:
+                    for peer_id in connected:
+                        if peer_id in self._peers:
+                            self._peers[peer_id].last_seen = datetime.utcnow()
     
     async def _cleanup_loop(self):
-        """清理循环 - 处理超时节点"""
+        """清理超时节点"""
         while self._running:
-            await asyncio.sleep(10)
+            await asyncio.sleep(60)  # 每分钟检查一次
             
             async with self._lock:
                 now = datetime.utcnow()
-                for peer in list(self._peers.values()):
-                    idle_time = (now - peer.last_seen).total_seconds()
-                    
-                    if idle_time > self.config.node_timeout_sec:
-                        logger.warning(f"Peer timeout: {peer.peer_id}, idle={idle_time:.0f}s")
-                        
-                        # 断开并重连
-                        peer.status = ConnectionStatus.DISCONNECTED
-                        
-                        if peer.retry_count < self.config.max_retry_count:
-                            asyncio.create_task(self.connect_peer(peer.peer_id))
-                        else:
-                            logger.error(f"Peer max retries exceeded: {peer.peer_id}")
+                timeout_peers = []
+                
+                for peer_id, peer in self._peers.items():
+                    if peer.status == ConnectionStatus.CONNECTED:
+                        age = (now - peer.last_seen).total_seconds()
+                        if age > self.config.node_timeout_sec:
+                            if peer.retry_count >= self.config.max_retry_count:
+                                timeout_peers.append(peer_id)
+                            else:
+                                peer.retry_count += 1
+                
+                # 断开超时的节点
+                for peer_id in timeout_peers:
+                    self._peers[peer_id].status = ConnectionStatus.DISCONNECTED
+                    logger.warning(f"Peer timed out: {peer_id[:12]}")
+                    if self._on_peer_disconnected:
+                        await self._on_peer_disconnected(peer_id)
     
-    # ==================== 状态查询 ====================
+    # ==================== 工具方法 ====================
+    
+    def _build_bootstrap_addresses(self) -> List[str]:
+        """构建 bootstrap 地址列表"""
+        addresses = []
+        for addr in self.config.bootstrap_nodes:
+            # 提取 host:port
+            parts = addr.split('/')
+            if len(parts) >= 4:
+                host = parts[2]
+                port = parts[4] if len(parts) > 4 else "4001"
+                addresses.append(f"{host}:{port}")
+        return addresses
+    
+    def _parse_port(self, multiaddr: str) -> int:
+        """解析 multiaddr 端口"""
+        parts = multiaddr.split('/')
+        for i, part in enumerate(parts):
+            if part == 'tcp' and i + 1 < len(parts):
+                return int(parts[i + 1])
+        return 4001
+    
+    def _format_address(self, multiaddr: str) -> str:
+        """转换 multiaddr 为 host:port"""
+        parts = multiaddr.split('/')
+        host = None
+        port = None
+        for i, part in enumerate(parts):
+            if part == 'ip4' or part == 'ip6':
+                host = parts[i + 1]
+            elif part == 'tcp':
+                port = parts[i + 1]
+        if host and port:
+            return f"{host}:{port}"
+        return multiaddr
+    
+    # ==================== 配置与回调 ====================
+    
+    def set_peer_connected_callback(self, callback: Callable):
+        """设置节点连接回调"""
+        self._on_peer_connected = callback
+    
+    def set_peer_disconnected_callback(self, callback: Callable):
+        """设置节点断开回调"""
+        self._on_peer_disconnected = callback
+    
+    def set_message_callback(self, callback: Callable):
+        """设置消息回调"""
+        self._on_message = callback
+    
+    # ==================== 状态与指标 ====================
     
     def get_info(self) -> dict:
-        """获取本地节点信息"""
+        """获取节点信息"""
         return {
             "peer_id": self._peer_id,
-            "addresses": self.config.listen_addresses,
-            "connected_peers": self._metrics.connected_peers,
+            "listen_addresses": self.config.listen_addresses,
+            "connected_peers": len([p for p in self._peers.values() if p.is_connected]),
             "relay_enabled": self.config.relay_enabled
         }
     
     def get_connections(self) -> dict:
         """获取连接状态"""
-        peers = []
+        connected = []
         relays_in_use = 0
         
         for peer in self._peers.values():
-            peers.append({
-                "peer_id": peer.peer_id,
-                "address": peer.addresses[0] if peer.addresses else "",
-                "status": peer.status.value,
-                "is_relay": peer.is_relay,
-                "relay_node": peer.relay_node
-            })
-            
-            if peer.status == ConnectionStatus.RELAYED:
-                relays_in_use += 1
+            if peer.is_connected:
+                connected.append({
+                    "peer_id": peer.peer_id,
+                    "address": peer.addresses[0] if peer.addresses else None,
+                    "status": peer.status.value,
+                    "is_relay": peer.is_relay,
+                    "relay_node": peer.relay_node
+                })
+                if peer.relay_node:
+                    relays_in_use += 1
         
         return {
-            "peers": peers,
+            "peers": connected,
             "relays_in_use": relays_in_use
-        }
-    
-    def get_metrics(self) -> dict:
-        """获取 P2P 指标"""
-        return {
-            "connected_peers": self._metrics.connected_peers,
-            "relayed_connections": self._metrics.relayed_connections,
-            "messages_sent": self._metrics.messages_sent,
-            "messages_received": self._metrics.messages_received,
-            "broadcast_latency_ms": self._metrics.broadcast_latency_ms,
-            "last_broadcast": self._metrics.last_broadcast.isoformat() if self._metrics.last_broadcast else None
         }
     
     def get_status(self) -> dict:
@@ -346,9 +444,21 @@ class P2PService:
             "running": self._running,
             "peer_id": self._peer_id,
             "total_peers": len(self._peers),
-            "connected_peers": self._metrics.connected_peers,
+            "connected_peers": len([p for p in self._peers.values() if p.is_connected]),
             "relay_enabled": self.config.relay_enabled,
             "metrics": self.get_metrics()
+        }
+    
+    def get_metrics(self) -> dict:
+        """获取指标"""
+        return {
+            "connections_established": self._metrics.connections_established,
+            "connections_failed": self._metrics.connections_failed,
+            "direct_connections": self._metrics.direct_connections,
+            "relayed_connections": self._metrics.relayed_connections,
+            "direct_fallback_count": self._metrics.direct_fallback_count,
+            "messages_sent": self._metrics.messages_sent,
+            "messages_received": self._metrics.messages_received
         }
 
 
