@@ -144,6 +144,7 @@ async def get_job(
         "matched_at": db_job.matched_at.isoformat() if db_job.matched_at else None,
         "completed_at": db_job.completed_at.isoformat() if db_job.completed_at else None,
         "actual_output_tokens": db_job.actual_output_tokens,
+        "result": db_job.result,
         "final_price": db_job.final_price,
         "retry_count": db_job.retry_count,
         "escrow": {
