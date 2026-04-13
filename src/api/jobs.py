@@ -4,6 +4,7 @@ Jobs API - F1: Job 提交与管理系统
 """
 
 from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional, List
 
@@ -15,6 +16,11 @@ from ..services import matching_service, escrow_service
 from config import settings
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
+class PreLockACKRequest(BaseModel):
+    """Pre-lock ACK 请求"""
+    node_id: str
 
 
 @router.get("/ping")
@@ -256,7 +262,7 @@ async def prelock_job(
 @router.post("/{job_id}/prelock/ack")
 async def prelock_ack(
     job_id: str,
-    node_id: str,
+    req: PreLockACKRequest,
     db: Session = Depends(get_db)
 ):
     """
