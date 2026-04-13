@@ -237,3 +237,25 @@ async def get_job_stats(db: Session = Depends(get_db)):
         "pending_in_queue": matching_service.get_pending_jobs_count(),
     }
 
+
+
+@router.get("/reconciliation/status")
+async def reconciliation_status(db: Session = Depends(get_db)):
+    """对账状态（从 jobs router）"""
+    from ..models.db_models import EscrowDB
+    
+    settled = db.query(EscrowDB).filter(
+        EscrowDB.status == EscrowStatusDB.SETTLED
+    ).count()
+    
+    total = db.query(EscrowDB).count()
+    
+    return {
+        "total_escrows": total,
+        "settled_escrows": settled,
+        "pending_escrows": total - settled,
+        "reconciliation_needed": settled > 0,
+        "dual_ledger_enabled": True,
+        "local_ledger": "SQLite",
+        "chain_ledger": "Escrow.sol (Polygon Amoy)"
+    }
