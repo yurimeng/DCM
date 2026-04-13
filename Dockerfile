@@ -12,7 +12,7 @@ COPY . .
 FROM python:3.11-slim
 WORKDIR /app
 
-# 只复制必要文件（强制重新构建）
+# 只复制必要文件
 COPY --from=builder /app/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -22,8 +22,9 @@ COPY --from=builder /app/config.py .
 # 创建数据目录
 RUN mkdir -p /app/data
 
-# 暴露端口 (Render 会覆盖)
+# 暴露端口 (默认 10000，Render 会覆盖)
 EXPOSE 10000
 
-# 启动命令 - 使用 PORT 环境变量
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# 启动命令 - 优先使用 PORT 环境变量
+ENV PORT=10000
+CMD ["sh", "-c", "uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
