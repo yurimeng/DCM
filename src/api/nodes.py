@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from typing import Optional, List
 from datetime import datetime
 import json
+import base64
 import uuid
 
 from ..database import get_db
@@ -127,6 +128,7 @@ async def node_online(
     # 注册节点到撮合引擎（内存服务）
     from ..models import Node
     import json
+import base64
     node_model = Node(
         node_id=node_id,
         gpu_type=db_node.gpu_type,
@@ -279,10 +281,15 @@ async def submit_result(
             original_result=result_submit.result,
         )
     
-    # 保存结果到数据库
+    # 解码并保存结果
+    try:
+        decoded_result = base64.b64decode(result_submit.result).decode()
+    except:
+        decoded_result = result_submit.result
+    
     job_repo.update(job_id, 
         status="completed",
-        result=result_submit.result,
+        result=decoded_result,
         actual_output_tokens=result_submit.actual_output_tokens,
         actual_latency_ms=result_submit.actual_latency_ms,
         completed_at=datetime.utcnow()

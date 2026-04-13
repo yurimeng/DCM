@@ -9,6 +9,7 @@ import os
 import time
 import json
 import hashlib
+import base64
 import requests
 import logging
 from datetime import datetime
@@ -223,10 +224,12 @@ class NodeAgent:
     
     def submit_result(self, job_id: str, result: str, latency_ms: int, output_tokens: int):
         """提交结果"""
+        # Base64 编码结果
+        encoded_result = base64.b64encode(result.encode()).decode()
         result_hash = hashlib.sha256(result.encode()).hexdigest()
         payload = {
             "job_id": job_id,
-            "result": result,
+            "result": encoded_result,
             "result_hash": result_hash,
             "actual_latency_ms": latency_ms,
             "actual_output_tokens": output_tokens

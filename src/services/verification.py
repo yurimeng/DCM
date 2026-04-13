@@ -4,6 +4,7 @@ Verification Service - F5: 验证服务
 """
 
 import hashlib
+import base64
 import random
 from typing import Optional, Tuple
 from datetime import datetime
@@ -34,8 +35,14 @@ class VerificationService:
         
         返回: (是否通过, 失败原因)
         """
+        # 解码 Base64
+        try:
+            decoded_result = base64.b64decode(result).decode()
+        except:
+            decoded_result = result
+        
         # 1. 哈希验证
-        computed_hash = hashlib.sha256(result.encode()).hexdigest()
+        computed_hash = hashlib.sha256(decoded_result.encode()).hexdigest()
         if computed_hash != result_hash:
             return False, f"hash_mismatch: expected {result_hash}, got {computed_hash}"
         
