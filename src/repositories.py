@@ -51,6 +51,8 @@ class JobRepository:
     
     def update(self, job_id: str, **kwargs) -> Optional[JobDB]:
         """更新 Job"""
+        from datetime import datetime
+        
         job = self.get(job_id)
         if not job:
             return None
@@ -60,6 +62,11 @@ class JobRepository:
                 # 枚举转换
                 if key == "status" and isinstance(value, JobStatus):
                     value = JobStatusDB[value.name.upper()]
+                    # 自动设置时间戳
+                    if value == JobStatusDB.MATCHED and not job.matched_at:
+                        job.matched_at = datetime.utcnow()
+                    elif value == JobStatusDB.COMPLETED and not job.completed_at:
+                        job.completed_at = datetime.utcnow()
                 setattr(job, key, value)
         
         self.db.commit()
