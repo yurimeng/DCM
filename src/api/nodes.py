@@ -14,7 +14,7 @@ import uuid
 from ..database import get_db
 from ..models import Node, NodeCreate, NodeResponse, NodeStatus, NodePollResponse, NodeResultSubmit
 from ..models.db_models import NodeDB, NodeStatusDB, StakeRecordDB, MatchDB
-from ..repositories import NodeRepository, MatchRepository, JobRepository
+from ..repositories import NodeRepository, MatchRepository, JobRepository, EscrowRepository
 from ..services import matching_service, escrow_service, verification_service, stake_service
 from config import settings
 
@@ -199,6 +199,13 @@ async def poll_job(
     match = matching_service.poll_node(node_id)
     
     if match:
+        # 更新 Escrow.match_id (修复关联问题)
+        escrow_repo = EscrowRepository(db)
+        db_escrow = escrow_repo.get_by_job(match.job_id)
+        if db_escrow and not db_escrow.match_id:
+            db_escrow.match_id = match.match_id
+            db.commit()
+        
         # 获取完整 Job 信息
         job_repo = JobRepository(db)
         db_job = job_repo.get(match.job_id)
@@ -335,6 +342,41 @@ async def submit_result(
         completed_at=datetime.utcnow()
     )
     
+    # 自动触发结算
+    try:
+        escrow_repo = EscrowRepository(db)
+        db_escrow = escrow_repo.get_by_job(job_id)
+        if db_escrow and db_escrow.status == "locked":
+            # 计算实际成本
+            actual_cost = escrow_service._calculate_cost(
+                match.locked_price,
+                result_submit.actual_output_tokens
+            )
+            
+            # 计算分配
+            platform_fee = actual_cost * 0.05  # 5%
+            node_earn = actual_cost * 0.95   # 95%
+            refund_amount = db_escrow.locked_amount - actual_cost
+            
+            # 更新 Escrow
+            db_escrow.spent_amount = actual_cost
+            db_escrow.actual_cost = actual_cost
+            db_escrow.actual_tokens = result_submit.actual_output_tokens
+            db_escrow.platform_fee = platform_fee
+            db_escrow.node_earn = node_earn
+            db_escrow.refund_amount = refund_amount
+            db_escrow.status = "settled"
+            from datetime import datetime
+            db_escrow.settled_at = datetime.utcnow()
+            
+            # 更新 Job 的 final_price
+            job_repo.update(job_id, final_price=actual_cost)
+            
+            db.commit()
+            logger.info(f"✅ 自动结算完成: job={job_id}, cost={actual_cost}, node_earn={node_earn}")
+    except Exception as e:
+        logger.error(f"结算失败: {e}")
+    
     response = {
         "received": True,
         "verification_triggered": True,
@@ -346,7 +388,6 @@ async def submit_result(
     if layer2_job_id:
         response["layer2_job_id"] = layer2_job_id
     
-
     # 释放节点（允许节点接收新 Job）
     matching_service.release_node(node_id)
     return response
