@@ -65,3 +65,4 @@ class SettlementRequest(BaseModel):
     locked_price: float
     verification_passed: bool
     is_mild_latency_penalty: bool = False  # 轻微延迟超标降价结算
+    result_hash: Optional[str] = None  # 结果哈希（双账本同步用）

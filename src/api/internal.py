@@ -490,6 +490,31 @@ async def execute_settlement_endpoint(
     
     db.commit()
     
+    # ===== 双账本同步：链上记录结算 =====
+    try:
+        from ..services.chain_sync import chain_sync_service
+        
+        # 获取哈希（从 Match 或生成）
+        input_hash = db_match.result_hash if db_match and db_match.result_hash else f"input_{db_match.job_id if db_match else request.match_id}"
+        result_hash = request.result_hash if hasattr(request, 'result_hash') else f"result_{request.match_id}"
+        
+        # 同步到链上
+        chain_sync_service.sync_settlement(
+            job_id=db_match.job_id if db_match else db_escrow.job_id,
+            match_id=request.match_id,
+            actual_cost=actual_cost,
+            node_earn=node_earn,
+            platform_fee=platform_fee,
+            refund_amount=max(0, refund_amount),
+            input_hash=input_hash,
+            result_hash=result_hash,
+            actual_tokens=request.actual_tokens
+        )
+        logger.info(f"Chain sync completed for match {request.match_id[:8]}")
+    except Exception as e:
+        # 链上同步失败不影响结算（双账本容错）
+        logger.error(f"Chain sync failed (non-fatal): {e}")
+    
     return SettlementResponse(
         success=True,
         escrow_id=db_escrow.escrow_id,
@@ -692,4 +717,111 @@ async def debug_db_status(db: Session = Depends(get_db)):
             {"match_id": m.match_id, "job_id": m.job_id, "node_id": m.node_id}
             for m in db.query(MatchDB).order_by(MatchDB.matched_at.desc()).limit(3).all()
         ],
+    }
+
+
+# ===== 对账接口 =====
+
+@router.get("/reconciliation/check")
+async def reconciliation_check(
+    job_id: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    对账检查：比较本地 SQLite 与链上记录
+    
+    Query Params:
+        job_id: 可选，指定 Job 进行对账；不传则对所有记录
+    
+    Returns:
+        对账结果
+    """
+    from ..services.chain_sync import chain_sync_service
+    from ..models.db_models import EscrowDB as EscrowDBModel
+    
+    if job_id:
+        # 单条对账
+        db_escrow = db.query(EscrowDBModel).filter(
+            EscrowDBModel.job_id == job_id
+        ).first()
+        
+        if not db_escrow:
+            raise HTTPException(status_code=404, detail="Escrow not found")
+        
+        # 获取链上记录
+        chain_record = chain_sync_service.get_chain_settlement(job_id)
+        
+        return {
+            "job_id": job_id,
+            "local": {
+                "actual_cost": db_escrow.actual_cost,
+                "node_earn": db_escrow.node_earn,
+                "platform_fee": db_escrow.platform_fee,
+                "refund_amount": db_escrow.refund_amount,
+                "status": str(db_escrow.status),
+                "settled": db_escrow.status == EscrowStatusDB.SETTLED
+            },
+            "chain": chain_record.__dict__ if chain_record else None,
+            "verified": chain_record is not None and chain_record.settled,
+            "method": "sqlite_primary" if chain_record else "chain_fallback"
+        }
+    else:
+        # 全量对账
+        settled_escrows = db.query(EscrowDBModel).filter(
+            EscrowDBModel.status == EscrowStatusDB.SETTLED
+        ).all()
+        
+        local_records = [
+            {
+                "job_id": e.job_id,
+                "actual_cost": e.actual_cost,
+                "node_earn": e.node_earn,
+                "platform_fee": e.platform_fee,
+                "refund_amount": e.refund_amount
+            }
+            for e in settled_escrows
+        ]
+        
+        result = chain_sync_service.reconcile(local_records)
+        
+        return {
+            "total": result.total_records,
+            "matched": result.matched,
+            "mismatched": result.mismatched,
+            "missing_on_chain": result.missing_on_chain,
+            "missing_local": result.missing_local,
+            "match_rate": f"{result.matched / max(result.total_records, 1) * 100:.2f}%",
+            "details": result.details[:20]  # 最多返回 20 条
+        }
+
+
+@router.get("/reconciliation/verify/{job_id}")
+async def verify_settlement(
+    job_id: str,
+    result_hash: str,
+    actual_cost: float,
+    db: Session = Depends(get_db)
+):
+    """
+    验证特定结算记录的完整性
+    
+    Args:
+        job_id: Job ID
+        result_hash: 期望的结果哈希
+        actual_cost: 期望的费用
+    
+    Returns:
+        验证结果
+    """
+    from ..services.chain_sync import chain_sync_service
+    
+    verified, reason = chain_sync_service.verify_settlement(
+        job_id, result_hash, actual_cost
+    )
+    
+    return {
+        "job_id": job_id,
+        "verified": verified,
+        "reason": reason,
+        "verified_at": datetime.utcnow().isoformat()
     }

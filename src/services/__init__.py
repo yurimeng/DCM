@@ -26,3 +26,6 @@ __all__ = [
 # Sprint 5: 链上服务
 from .escrow_chain import chain_escrow_service
 from .stake_chain import chain_stake_service
+
+# Sprint 6: 双账本同步
+from .chain_sync import chain_sync_service, ChainSyncService
