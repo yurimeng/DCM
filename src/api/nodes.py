@@ -66,6 +66,9 @@ async def register_node(
         status=NodeStatus(_safe_status(db_node.status)),
         stake_required=db_node.stake_required,
         stake_amount=db_node.stake_amount,
+        gpu_count=node.gpu_count,
+        slot_count=len(node.slot_ids),
+        worker_count=len(node.worker_ids),
         next_step=f"Deposit {db_node.stake_required} USDC to activate",
     )
 
