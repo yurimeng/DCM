@@ -366,7 +366,6 @@ async def submit_result(
             db_escrow.node_earn = node_earn
             db_escrow.refund_amount = refund_amount
             db_escrow.status = "settled"
-            from datetime import datetime
             db_escrow.settled_at = datetime.utcnow()
             
             # 更新 Job 的 final_price
