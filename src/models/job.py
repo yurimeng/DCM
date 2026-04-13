@@ -20,8 +20,11 @@ class JobStatus(str, Enum):
 
 
 class JobCreate(BaseModel):
-    """Job 创建请求"""
-    model: str = Field(default="qwen2.5:7b", description="模型名称")
+    """Job 创建请求
+    
+    model: 可选，不指定则表示通用任务，系统选择最优模型
+    """
+    model: Optional[str] = Field(None, description="模型名称（可选，不指定则通用任务）")
     input_tokens: int = Field(..., gt=0, description="输入 token 数量")
     output_tokens_limit: int = Field(..., gt=0, le=4096, description="输出 token 上限")
     max_latency: int = Field(..., ge=1000, le=30000, description="最大延迟（ms）")

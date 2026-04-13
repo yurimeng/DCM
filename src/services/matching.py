@@ -54,27 +54,42 @@ class MatchingService:
     def poll_node(self, node_id: str) -> Optional[Match]:
         """
         节点拉取时触发撮合
+        
+        对于通用任务（无 model），优先选择最优节点
+        对于指定模型任务，按正常流程匹配
         """
         # 查找该节点是否已被匹配
         if node_id in self._node_jobs:
             match_id = self._node_jobs[node_id]
             return self._matches.get(match_id)
         
-        # 否则为该节点寻找合适的 Job
+        # 获取节点信息
         node = self._online_nodes.get(node_id)
         if not node or node.status != NodeStatus.ONLINE:
             return None
         
-        # 从 pending jobs 中选择（按 bid_price 降序）
-        sorted_jobs = sorted(
-            self._pending_jobs.values(),
-            key=lambda j: (j.bid_price, j.created_at),
-            reverse=True
-        )
+        # 获取所有待匹配的 Jobs
+        pending_jobs = list(self._pending_jobs.values())
         
-        for job in sorted_jobs:
+        # 分离：通用任务 和 指定模型任务
+        generic_jobs = [j for j in pending_jobs if not j.model]
+        model_jobs = [j for j in pending_jobs if j.model]
+        
+        # 1. 先处理指定模型的 Jobs（精确匹配）
+        for job in model_jobs:
             if self._can_match(job, node):
                 return self._create_match(job, node)
+        
+        # 2. 再处理通用 Jobs（使用最优节点）
+        if generic_jobs:
+            # 对通用任务进行排序：优先选择价格低、速度快、成功率高
+            sorted_generic = sorted(
+                generic_jobs,
+                key=lambda j: (-self._get_match_score(j, node), j.created_at)
+            )
+            for job in sorted_generic:
+                if self._can_match(job, node):
+                    return self._create_match(job, node)
         
         return None
     
@@ -117,15 +132,17 @@ class MatchingService:
         """检查是否可以撮合
         
         匹配条件（必须全部满足）：
-        1. 模型匹配：job.model in node.model_support
+        1. 模型匹配：job.model in node.model_support (如果不指定模型则跳过)
         2. 价格匹配：job.bid_price <= node.ask_price
         3. 延迟匹配：node.avg_latency <= job.max_latency
         4. 节点在线：node.status == NodeStatus.ONLINE
         5. 成功率门槛：node.avg_success_rate >= job.min_success_rate (如果有)
         6. 质量门槛：node.avg_quality_score >= job.min_quality_score (如果有)
         """
-        # 1. 模型匹配（最关键，不匹配则直接拒绝）
-        if job.model not in node.model_support:
+        # 1. 模型匹配
+        #    - 如果 job.model 有值 → 必须匹配
+        #    - 如果 job.model 为空 → 通用任务，任何模型都可以
+        if job.model and job.model not in node.model_support:
             return False
         
         # 2. 价格匹配
@@ -151,17 +168,43 @@ class MatchingService:
                 return False
         
         return True
+
+    def _get_match_score(self, job: Job, node: Node) -> float:
+        """计算匹配得分（用于通用任务选择最优节点）
+        
+        分数越低越优先：
+        - 价格权重 50%
+        - 延迟权重 30%
+        - 成功率权重 20%
+        """
+        # 归一化价格 (0-1)
+        price_score = node.ask_price / max(job.bid_price, 0.001)
+        
+        # 归一化延迟 (0-1)
+        latency_score = job.max_latency / max(node.avg_latency, 1)
+        
+        # 成功率分数 (0-1)
+        success_score = node.avg_success_rate
+        
+        # 综合得分 (越低越优)
+        return price_score * 0.5 + latency_score * 0.3 + success_score * 0.2
     
     def _create_match(self, job: Job, node: Node) -> Match:
         """创建 Match"""
         # 锁定价格（快照）- 使用 job 的 bid_price
         locked_price = job.bid_price
         
+        # 确定实际使用的模型
+        # - 如果 job 指定了 model → 使用该 model
+        # - 如果 job 未指定 model → 使用节点支持的第一个模型（最便宜/最快）
+        used_model = job.model if job.model else (node.model_support[0] if node.model_support else None)
+        
         # 创建 Match
         match = Match(
             job_id=job.job_id,
             node_id=node.node_id,
             locked_price=locked_price,
+            used_model=used_model,
         )
         
         # 更新状态

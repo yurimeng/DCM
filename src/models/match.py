@@ -24,6 +24,9 @@ class Match(BaseModel):
     locked_price: float  # 撮合瞬间锁定，不受后续价格变动影响
     matched_at: datetime = Field(default_factory=datetime.utcnow)
     
+    # 实际使用的模型（通用任务会填充）
+    used_model: Optional[str] = None
+    
     # 执行后填充
     result_hash: Optional[str] = None
     actual_latency_ms: Optional[int] = None

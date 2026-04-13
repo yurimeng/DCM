@@ -199,15 +199,31 @@ class NodeAgent:
             
             resp.raise_for_status()
             result = resp.json()
-            return result.get("job") if result.get("has_job") else None
+            
+            job = result.get("job")
+            if job:
+                # 从 Match 获取实际使用的模型
+                used_model = result.get("used_model")
+                if used_model:
+                    job["used_model"] = used_model
+                    logger.info(f"通用任务，使用模型: {used_model}")
+            
+            return job if result.get("has_job") else None
         except:
             return None
     
-    def call_ollama(self, prompt: str, timeout: int = 120) -> tuple:
-        """调用 Ollama 推理"""
+    def call_ollama(self, prompt: str, timeout: int = 120, model: str = None) -> tuple:
+        """调用 Ollama 推理
+        
+        Args:
+            prompt: 输入提示
+            timeout: 超时时间
+            model: 可选，指定模型（用于通用任务）
+        """
         start_time = time.time()
+        use_model = model or self.model
         payload = {
-            "model": self.model,
+            "model": use_model,
             "prompt": prompt,
             "stream": False,
             "options": {"num_predict": 50}  # 简短回答
@@ -284,8 +300,12 @@ class NodeAgent:
                     job_id = job["job_id"]
                     processed_jobs.add(job_id)
                     
-                    logger.info(f"📥 收到 Job: {job_id[:8]}...")
-                    response, latency, tokens = self.call_ollama("你好")
+                    # 获取实际使用的模型（通用任务由系统分配）
+                    used_model = job.get("used_model") or self.model
+                    logger.info(f"📥 收到 Job: {job_id[:8]}... (model: {used_model})")
+                    
+                    # 使用分配的模型调用 Ollama
+                    response, latency, tokens = self.call_ollama("你好", model=used_model)
                     
                     if response:
                         logger.info(f"⚙️ 推理完成: {latency}ms, {tokens} tokens")

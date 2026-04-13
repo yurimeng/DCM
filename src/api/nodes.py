@@ -195,15 +195,19 @@ async def poll_job(
     match = matching_service.poll_node(node_id)
     
     if match:
-        # 获取 Job 信息（简化）
+        # 获取完整 Job 信息
+        job_repo = JobRepository(db)
+        db_job = job_repo.get(match.job_id)
+        
         return NodePollResponse(
             has_job=True,
+            used_model=match.used_model,  # 实际使用的模型
             job={
                 "job_id": match.job_id,
-                "model": settings.mvp_model,
-                "input_tokens": 2048,  # TODO: 从 Job 获取
-                "output_tokens_limit": 1024,  # TODO: 从 Job 获取
-                "max_latency": 5000,  # TODO: 从 Job 获取
+                "model": db_job.model if db_job else match.used_model,
+                "input_tokens": db_job.input_tokens if db_job else 0,
+                "output_tokens_limit": db_job.output_tokens_limit if db_job else 0,
+                "max_latency": db_job.max_latency if db_job else 0,
                 "locked_price": match.locked_price,
             }
         )
