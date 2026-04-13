@@ -14,9 +14,13 @@ class JobStatusDB(str, enum.Enum):
     """Job 状态"""
     PENDING = "pending"
     MATCHED = "matched"
+    PRE_LOCKED = "pre_locked"    # 预锁定中
+    RESERVED = "reserved"        # 已预约
+    DISPATCHED = "dispatched"    # 已分发
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class NodeStatusDB(str, enum.Enum):
@@ -58,6 +62,10 @@ class JobDB(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     matched_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
+    
+    # Pre-lock 字段
+    pre_locked_at = Column(DateTime, nullable=True)
+    pre_lock_expires_at = Column(DateTime, nullable=True)
     
     # 执行结果
     actual_output_tokens = Column(Integer, nullable=True)
