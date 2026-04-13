@@ -278,6 +278,9 @@ async def submit_result(
             original_result=result_submit.result,
         )
     
+    # 更新 Job 状态
+    job_repo.update(job_id, status="completed")
+    
     response = {
         "received": True,
         "verification_triggered": True,
