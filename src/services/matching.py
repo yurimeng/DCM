@@ -124,8 +124,8 @@ class MatchingService:
     
     def _create_match(self, job: Job, node: Node) -> Match:
         """创建 Match"""
-        # 锁定价格（快照）
-        locked_price = node.ask_price
+        # 锁定价格（快照）- 使用 job 的 bid_price
+        locked_price = job.bid_price
         
         # 创建 Match
         match = Match(
