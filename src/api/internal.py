@@ -363,6 +363,8 @@ async def submit_layer2_result_endpoint(
 # ===== 结算接口 =====
 
 @router.post("/settlement/execute", response_model=SettlementResponse)
+logger = logging.getLogger(__name__)
+
 async def execute_settlement_endpoint(
     request: SettlementRequest,
     db: Session = Depends(get_db)
@@ -379,13 +381,46 @@ async def execute_settlement_endpoint(
     escrow_repo = EscrowRepository(db)
     db_escrow = escrow_repo.get_by_match(request.match_id)
     
-    # 如果没找到，尝试按 job_id 查找（备用逻辑）
+    # 如果没找到，尝试按 match_id 直接查找
     if not db_escrow:
-        # 先查找 Match 获取 job_id
+        from ..models.db_models import EscrowDB as EscrowDBModel
+        db_escrow = db.query(EscrowDBModel).filter(
+            EscrowDBModel.match_id == request.match_id
+        ).first()
+    
+    # 如果还没找到，尝试从 Match 获取 job_id 再查找
+    if not db_escrow:
         match_repo = MatchRepository(db)
-        db_match_alt = match_repo.get(request.match_id)
-        if db_match_alt:
-            db_escrow = escrow_repo.get_by_job(db_match_alt.job_id)
+        db_match_lookup = match_repo.get(request.match_id)
+        if db_match_lookup:
+            db_escrow = escrow_repo.get_by_job(db_match_lookup.job_id)
+    
+    # 如果 Escrow 仍然找不到，尝试创建一个新的（备用）
+    if not db_escrow:
+        # 查找 Match 获取 job_id
+        match_repo = MatchRepository(db)
+        db_match_for_escrow = match_repo.get(request.match_id)
+        if db_match_for_escrow:
+            # 创建新的 Escrow
+            from ..models.db_models import EscrowDB as EscrowDBModel
+            job_repo = JobRepository(db)
+            db_job_for_escrow = job_repo.get(db_match_for_escrow.job_id)
+            if db_job_for_escrow:
+                locked_amount = escrow_service._calculate_escrow(
+                    request.locked_price,
+                    db_job_for_escrow.input_tokens,
+                    db_job_for_escrow.output_tokens_limit
+                )
+                db_escrow = EscrowDBModel(
+                    escrow_id=f"escrow_{db_match_for_escrow.job_id}",
+                    job_id=db_match_for_escrow.job_id,
+                    match_id=request.match_id,
+                    locked_amount=locked_amount,
+                    status=EscrowStatusDB.LOCKED,
+                )
+                db.add(db_escrow)
+                db.commit()
+                db.refresh(db_escrow)
     
     if not db_escrow:
         raise HTTPException(status_code=404, detail="Escrow not found for match_id: " + request.match_id)
