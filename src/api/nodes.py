@@ -37,10 +37,17 @@ async def register_node(
     返回所需的 Stake 门槛
     """
     # 1. 创建 Node Pydantic 模型
-    # 使用提供的 node_id 或生成新的
     node_data = node_create.model_dump()
-    if not node_data.get('node_id'):
-        node_data['node_id'] = str(uuid.uuid4())
+    
+    # 生成唯一的 node_id
+    node_data['node_id'] = str(uuid.uuid4())
+    
+    # 预留扩展字段 (metadata) - 未来可用于用户绑定、钱包地址等
+    node_data['metadata'] = {
+        'user_id': None,           # 未来绑定用户
+        'wallet_address': None,    # 未来绑定钱包
+        'tags': [],                # 自定义标签
+    }
     
     node = Node(**node_data)
     
