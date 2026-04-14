@@ -143,17 +143,22 @@ class MatchingService:
         """
         节点拉取时触发撮合
         
-        对于通用任务（无 model），优先选择最优节点
-        对于指定模型任务，按正常流程匹配
+        从 NodeStatusStore 读取节点状态，而不是本地注册
         """
         # 查找该节点是否已被匹配
         if node_id in self._node_jobs:
             match_id = self._node_jobs[node_id]
             return self._matches.get(match_id)
         
-        # 获取节点信息
+        # 从 NodeStatusStore 检查节点是否在线（10秒内有更新）
+        from .node_status_store import node_status_store
+        if not node_status_store.is_online(node_id, max_age_seconds=10):
+            return None
+        
+        # 获取节点信息（从 DB 或内存）
         node = self._online_nodes.get(node_id)
-        if not node or node.status != NodeStatus.ONLINE:
+        if not node:
+            # 节点不在内存中，无法匹配
             return None
         
         # 从 Queue 获取待匹配 Jobs
@@ -264,10 +269,9 @@ class MatchingService:
         1. 模型匹配：job.model in node.model_support (如果不指定模型则跳过)
         2. 价格匹配：job.bid_price <= node.ask_price
         3. 延迟匹配：node.avg_latency <= job.max_latency
-        4. 节点在线：node.status == NodeStatus.ONLINE
-        5. 成功率门槛：node.avg_success_rate >= job.min_success_rate (如果有)
-        6. 质量门槛：node.avg_quality_score >= job.min_quality_score (如果有)
-        7. 队列匹配：node.available_queue >= job_tokens (DCM v3.2)
+        4. 队列匹配：node.available_queue >= job_tokens (DCM v3.2)
+        
+        注意：节点在线状态由 NodeStatusStore 统一管理（poll_node 已检查）
         """
         # 1. 模型匹配
         #    - 如果 job.model 有值 → 必须匹配
@@ -284,27 +288,13 @@ class MatchingService:
         if node.avg_latency > job.max_latency:
             return False
         
-        # 4. 节点状态
-        if node.status != NodeStatus.ONLINE:
-            return False
-        
-        # 5. 成功率检查（可选）
-        if hasattr(job, 'min_success_rate') and job.min_success_rate:
-            if node.avg_success_rate < job.min_success_rate:
-                return False
-        
-        # 6. 质量评分检查（可选）
-        if hasattr(job, 'min_quality_score') and job.min_quality_score:
-            if node.avg_quality_score < job.min_quality_score:
-                return False
-        
-        # 7. 队列检查 (DCM v3.2)
+        # 4. 队列容量检查
         job_tokens = job.input_tokens + job.output_tokens_limit
-        if not node.is_idle() or not node.queue_info.reserve(job_tokens):
-            # 如果预留失败（队列不足），则不能匹配
+        if not node.is_idle():
             return False
-        
-        # 预留成功，释放预留（实际预留会在 create_match 中处理）
+        if not node.queue_info.reserve(job_tokens):
+            return False
+        # 释放预留（实际预留会在 create_match 中处理）
         node.queue_info.release(job_tokens)
         
         return True
