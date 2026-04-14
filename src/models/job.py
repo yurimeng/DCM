@@ -76,7 +76,9 @@ class JobCreate(BaseModel):
     约束从 job_config 读取
     messages 取代 prompt，支持上下文
     """
-    model_requirement: Optional[str] = Field(None, description="模型需求（可选）")
+    # 模型字段（API 使用 model，内部使用 model_requirement）
+    model: Optional[str] = Field(None, description="模型名称")
+    model_requirement: Optional[str] = Field(None, description="模型需求（内部）")
     input_tokens: int = Field(..., gt=0, description="输入 token 数量")
     output_tokens_limit: int = Field(..., gt=0, description="输出 token 上限")
     max_latency: int = Field(..., ge=1000, le=30000, description="最大延迟（ms）")
@@ -220,8 +222,8 @@ class Job(JobCreate):
     
     @property
     def model(self) -> Optional[str]:
-        """兼容属性: 返回 model_requirement"""
-        return self.model_requirement
+        """兼容属性: 返回 model 或 model_requirement"""
+        return self.model or self.model_requirement
     
     def pre_lock_expired(self) -> bool:
         """Pre-Lock 是否过期"""
