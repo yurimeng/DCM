@@ -120,14 +120,28 @@ class NodeRepository:
     
     def create(self, node: Node) -> NodeDB:
         """Create Node / 创建 Node"""
+        # 从嵌套结构提取值
+        gpu_type = node.hardware.gpu_type
+        vram_gb = node.hardware.vram_per_gpu_gb
+        gpu_count = node.hardware.gpu_count
+        
+        # 从 reliability 获取 avg_latency
+        avg_latency = node.reliability.avg_latency_ms
+        
+        # 从 pricing 获取 ask_price
+        ask_price = node.pricing.ask_price_usdc_per_mtoken
+        
+        # 从 location 获取 region
+        region = node.location.region
+        
         db_node = NodeDB(
             node_id=node.node_id,
-            gpu_type=node.gpu_type,
-            vram_gb=node.vram_gb,
-            gpu_count=node.gpu_count,
+            gpu_type=gpu_type,
+            vram_gb=vram_gb,
+            gpu_count=gpu_count,
             # GPU Details / GPU 详细信息
-            gpu_qty=getattr(node, 'gpu_qty', node.gpu_count),
-            gpu_vram_gb=getattr(node, 'gpu_vram_gb', node.vram_gb),
+            gpu_qty=getattr(node, 'gpu_qty', gpu_count),
+            gpu_vram_gb=getattr(node, 'gpu_vram_gb', vram_gb),
             gpu_pooled=getattr(node, 'gpu_pooled', False),
             # OS Info / 操作系统信息
             os_name=getattr(node, 'os_name', ''),
@@ -135,15 +149,15 @@ class NodeRepository:
             hostname=getattr(node, 'hostname', ''),
             # Required: runtime and model / 必填：runtime 和 model
             runtime=node.runtime,
-            model=node.model,
-            model_support=json.dumps(node.model_support),
-            ask_price=node.ask_price,
-            avg_latency=node.avg_latency,
-            region=node.region,
-            status=NodeStatusDB[node.status.name.upper()],
-            stake_amount=node.stake_amount,
-            stake_required=node.stake_required,
-            stake_tier=node.stake_tier.value,
+            model=node.runtime.loaded_models[0] if node.runtime.loaded_models else '',
+            model_support=json.dumps(node.runtime.loaded_models),
+            ask_price=ask_price,
+            avg_latency=avg_latency,
+            region=region,
+            status=NodeStatusDB.ONLINE,  # Default to ONLINE
+            stake_amount=node.economy.stake_amount,
+            stake_required=node.economy.stake_required,
+            stake_tier=node.economy.stake_tier.value,
         )
         self.db.add(db_node)
         self.db.commit()
