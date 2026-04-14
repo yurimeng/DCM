@@ -61,22 +61,16 @@ async def register_node(
     # 1. Create Node Pydantic model with nested structure
     # 创建 Node Pydantic 模型（使用嵌套结构）
     from ..models import Node
+    from ..models.node import Pricing
     
     # 从请求中提取 avg_latency_ms（默认100）
     avg_latency_ms = 100
     if node_create.pricing and hasattr(node_create.pricing, 'avg_latency_ms'):
         avg_latency_ms = node_create.pricing.avg_latency_ms or 100
     
-    # 直接从 pricing 对象获取 ask_price_usdc_per_mtoken
-    # 使用 getattr 防止属性不存在时报错
-    ask_price_value = 0.5  # 默认值
-    if node_create.pricing:
-        ask_price_value = getattr(node_create.pricing, 'ask_price_usdc_per_mtoken', 0.5)
-    
-    pricing_data = {
-        'ask_price_usdc_per_mtoken': ask_price_value,
-        'avg_latency_ms': avg_latency_ms,
-    }
+    # 直接使用 node_create.pricing 对象（不要转换为 dict）
+    # 因为 Pricing 使用 alias，dict 构造会丢失数据
+    pricing_obj = node_create.pricing if node_create.pricing else Pricing()
     
     node = Node(
         node_id=str(uuid.uuid4()),
@@ -84,7 +78,7 @@ async def register_node(
         runtime=node_create.runtime or {'type': 'ollama', 'loaded_models': []},
         hardware=node_create.hardware or {'gpu_type': 'unknown', 'gpu_count': 1},
         reliability={'avg_latency_ms': avg_latency_ms},
-        pricing=pricing_data,
+        pricing=pricing_obj,
         location=node_create.location or {'region': 'unknown'},
     )
     node.economy.stake_tier = 'personal'
