@@ -292,24 +292,23 @@ class MatchingService:
         """检查是否可以撮合 (从 NodeStatusStore 获取容量)
         
         匹配规则:
-        - job.model: 精确匹配 model_support
-        - job.model_family: 匹配 model 支持的家族
+        - job.model: 精确匹配 model_support（支持前缀匹配如 qwen → qwen2.5:7b）
         - job.model 为空: 匹配任何可用节点（由系统分配排名第一的）
         """
         # 模型匹配
         if job.model:
-            # 精确匹配
-            if job.model not in node.model_support:
-                return False
-        elif job.model_family:
-            # 家族匹配（如 qwen 匹配 qwen2.5:7b）
-            family_found = False
-            for m in node.model_support:
-                if m.startswith(job.model_family):
-                    family_found = True
-                    break
-            if not family_found:
-                return False
+            # 检查是否为完整模型名
+            if job.model in node.model_support:
+                pass  # 精确匹配
+            else:
+                # 尝试前缀匹配（如 qwen 匹配 qwen2.5:7b）
+                family_found = False
+                for m in node.model_support:
+                    if m.startswith(job.model):
+                        family_found = True
+                        break
+                if not family_found:
+                    return False
         # job.model 为空: 不检查模型（匹配任何可用节点）
         
         # 价格匹配
