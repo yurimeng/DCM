@@ -27,13 +27,9 @@ router = APIRouter(prefix="/nodes", tags=["nodes"])
 
 def _debug_error(e: Exception, context: str = "") -> HTTPException:
     """统一错误处理 (debug 模式返回详细信息)"""
-    if settings.debug:
-        import traceback
-        logger.error(f"{context}: {e}\n{traceback.format_exc()}")
-        return HTTPException(status_code=500, detail=f"{context}: {e}")
-    else:
-        logger.error(f"{context}: {e}")
-        return HTTPException(status_code=500, detail="Internal Server Error")
+    import traceback
+    logger.error(f"{context}: {e}\n{traceback.format_exc()}")
+    return HTTPException(status_code=500, detail=f"{context}: {e}")
 
 
 def _safe_status(status) -> str:
