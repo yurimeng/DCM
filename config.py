@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     project_name: str = "DCM"
     version: str = "0.1.0"
     mvp_mode: bool = True
-    debug: bool = False  # Debug 模式: 返回详细错误信息
+    debug: bool = True  # Debug 模式: 返回详细错误信息
     
     # ===== 数据库 =====
     database_url: str = "sqlite:///./dcm.db"
