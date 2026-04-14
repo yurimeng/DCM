@@ -305,7 +305,7 @@ class InMemoryJobQueue(JobQueueService):
             return stats
     
     def get_pending_jobs(self) -> List[dict]:
-        """获取所有待处理 Job"""
+        """获取所有待处理 Job (排除已完成的)"""
         with self._lock:
             return [
                 self._jobs[job_id]
@@ -314,6 +314,7 @@ class InMemoryJobQueue(JobQueueService):
                     self._heap
                 )
                 if job_id in self._jobs
+                and self._jobs[job_id].get("status") != "completed"
             ]
     
     def get_dead_letter_jobs(self) -> List[dict]:

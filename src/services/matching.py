@@ -179,10 +179,14 @@ class MatchingService:
             return None
         
         # 分离：通用任务 和 指定模型任务
+        # 过滤掉已经匹配的 Job
         generic_jobs = []
         model_jobs = []
         for job_data in pending_jobs_data:
             job = Job(**job_data)
+            # 跳过已匹配的 Job
+            if job.job_id in self._job_to_match:
+                continue
             if not job.model:
                 generic_jobs.append(job)
             else:
