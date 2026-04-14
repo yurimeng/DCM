@@ -17,6 +17,9 @@ from config import settings
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 class PreLockACKRequest(BaseModel):
     """Pre-lock ACK 请求"""
@@ -49,64 +52,70 @@ async def create_job(
     2. Escrow 锁定
     3. 触发撮合引擎
     """
-    # 1. 创建 Job Pydantic 模型
-    job = Job(**job_create.model_dump())
-    
-    # 2. 保存到数据库
-    job_repo = JobRepository(db)
-    db_job = job_repo.create(job)
-    
-    # 3. 创建 Escrow（数据库）
-    db_escrow = EscrowDB(
-        escrow_id=f"escrow_{job.job_id}",
-        job_id=job.job_id,
-        locked_amount=escrow_service._calculate_escrow(
-            job.bid_price,
-            job.input_tokens,
-            job.output_tokens_limit
-        ),
-        status=EscrowStatusDB.LOCKED,
-    )
-    db.add(db_escrow)
-    db.commit()
-    
-    # 4. 触发撮合（同步到内存服务）
-    matching_service.add_job(job)
-    match = matching_service.trigger_match(job.job_id)
-    
-    if match:
-        # 更新 Job 状态（不自动 commit）
-        db_job = job_repo.get(job.job_id)
-        if db_job:
-            from datetime import datetime
-            db_job.status = JobStatusDB.MATCHED
-            db_job.matched_at = datetime.utcnow()
+    try:
+        # 1. 创建 Job Pydantic 模型
+        job = Job(**job_create.model_dump())
         
-        # 保存 Match 到数据库
-        from ..models.db_models import MatchDB
-        db_match = MatchDB(
-            match_id=match.match_id,
-            job_id=match.job_id,
-            node_id=match.node_id,
-            locked_price=match.locked_price,
-            matched_at=match.matched_at,
+        # 2. 保存到数据库
+        job_repo = JobRepository(db)
+        db_job = job_repo.create(job)
+        
+        # 3. 创建 Escrow（数据库）
+        db_escrow = EscrowDB(
+            escrow_id=f"escrow_{job.job_id}",
+            job_id=job.job_id,
+            locked_amount=escrow_service._calculate_escrow(
+                job.bid_price,
+                job.input_tokens,
+                job.output_tokens_limit
+            ),
+            status=EscrowStatusDB.LOCKED,
         )
-        db.add(db_match)
-        
-        # 更新 Escrow
-        db_escrow.match_id = match.match_id
-        
-        # 一次性提交所有更改
+        db.add(db_escrow)
         db.commit()
-    
-    # 5. 返回响应
-    return JobResponse(
-        job_id=job.job_id,
-        escrow_amount=db_escrow.locked_amount,
-        status=JobStatus(_safe_status(db_job.status)),
-        created_at=db_job.created_at,
-        matched_at=db_job.matched_at,
-    )
+        
+        # 4. 触发撮合（同步到内存服务）
+        matching_service.add_job(job)
+        match = matching_service.trigger_match(job.job_id)
+        
+        if match:
+            # 更新 Job 状态（不自动 commit）
+            db_job = job_repo.get(job.job_id)
+            if db_job:
+                from datetime import datetime
+                db_job.status = JobStatusDB.MATCHED
+                db_job.matched_at = datetime.utcnow()
+            
+            # 保存 Match 到数据库
+            from ..models.db_models import MatchDB
+            db_match = MatchDB(
+                match_id=match.match_id,
+                job_id=match.job_id,
+                node_id=match.node_id,
+                locked_price=match.locked_price,
+                matched_at=match.matched_at,
+            )
+            db.add(db_match)
+            
+            # 更新 Escrow
+            db_escrow.match_id = match.match_id
+            
+            # 一次性提交所有更改
+            db.commit()
+        
+        # 5. 返回响应
+        return JobResponse(
+            job_id=job.job_id,
+            escrow_amount=db_escrow.locked_amount,
+            status=JobStatus(_safe_status(db_job.status)),
+            created_at=db_job.created_at,
+            matched_at=db_job.matched_at,
+        )
+    except Exception as e:
+        logger.error(f"Job creation failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 
