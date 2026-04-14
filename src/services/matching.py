@@ -363,10 +363,6 @@ class MatchingService:
         # - 如果 job 未指定 model → 使用节点支持的第一个模型（最便宜/最快）
         used_model = job.model if job.model else (node.model_support[0] if node.model_support else None)
         
-        # 预留队列容量 (DCM v3.2)
-        job_tokens = self._get_job_tokens(job)
-        node.queue_info.reserve(job_tokens)
-        
         # 创建 Match
         match = Match(
             job_id=job.job_id,
