@@ -128,65 +128,6 @@ class MatchingService:
         """
         节点拉取时触发撮合
         
-        从 NodeStatusStore 读取节点状态，而不是本地注册
-        """
-        # 查找该节点是否已被匹配
-        if node_id in self._node_jobs:
-            match_id = self._node_jobs[node_id]
-            return self._matches.get(match_id)
-        
-        # 从 NodeStatusStore 检查节点是否在线（10秒内有更新）
-        from .node_status_store import node_status_store
-        if not node_status_store.is_online(node_id, max_age_seconds=10):
-            return None
-        
-        # 从 NodeStatusStore 获取实时状态
-        pending_jobs_data = self.queue.get_pending_jobs()
-        
-        if not pending_jobs_data:
-            return None
-        
-        # 分离：通用任务 和 指定模型任务
-        generic_jobs = []
-        model_jobs = []
-        
-        for job_data in pending_jobs_data:
-            job = Job(**job_data)
-            if not job.model:
-                generic_jobs.append(job)
-            else:
-                model_jobs.append(job)
-        
-        # 1. 先处理指定模型的 Jobs（精确匹配）
-        for job in model_jobs:
-            if self._can_match(job, node):
-                match = self._create_match(job, node)
-                if match:
-                    # 确认消费
-                    self.queue.acknowledge(job.job_id)
-                    return match
-        
-        # 2. 再处理通用 Jobs（使用最优节点）
-        if generic_jobs:
-            # 对通用任务进行排序：优先选择价格低、速度快、成功率高
-            sorted_generic = sorted(
-                generic_jobs,
-                key=lambda j: (-self._get_match_score(j, node), j.created_at)
-            )
-            for job in sorted_generic:
-                if self._can_match(job, node):
-                    match = self._create_match(job, node)
-                    if match:
-                        # 确认消费
-                        self.queue.acknowledge(job.job_id)
-                        return match
-        
-        return None
-    
-    def poll_node(self, node_id: str) -> Optional[Match]:
-        """
-        节点拉取时触发撮合
-        
         从 NodeStatusStore 获取节点状态和容量信息
         """
         # 查找该节点是否已被匹配
