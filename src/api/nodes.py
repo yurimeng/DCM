@@ -491,7 +491,7 @@ async def submit_result(
             # 计算实际成本
             actual_cost = escrow_service._calculate_cost(
                 match.locked_price,
-                result_submit.actual_output_tokens
+                result_submit.actual_tokens
             )
             
             # 计算分配
@@ -502,7 +502,7 @@ async def submit_result(
             # 更新 Escrow
             db_escrow.spent_amount = actual_cost
             db_escrow.actual_cost = actual_cost
-            db_escrow.actual_tokens = result_submit.actual_output_tokens
+            db_escrow.actual_tokens = result_submit.actual_tokens
             db_escrow.platform_fee = platform_fee
             db_escrow.node_earn = node_earn
             db_escrow.refund_amount = refund_amount
