@@ -381,7 +381,7 @@ class MatchingService:
         self._job_to_match[job.job_id] = match.match_id
         self._node_jobs[node.node_id] = match.match_id
         
-        logger.info(f"Match created: {match.match_id}, job={job.job_id}, node={node.node_id}, tokens={job_tokens}")
+        logger.info(f"Match created: {match.match_id}, job={job.job_id}, node={node.node_id}")
         
         return match
     
