@@ -22,12 +22,12 @@ class MatchingService:
     
     职责:
     - 消费 Job Queue 中的 Job
-    - 匹配 Node Slot
+    - 匹配 Node（从 NodeStatusStore 读取节点状态）
     - 创建 Match 记录
     
     注意: 
-    - 与 Job Queue 完全解耦，通过注入的 queue 服务消费
-    - 不直接管理 Job 存储，只负责撮合逻辑
+    - Node 状态从 NodeStatusStore 读取，不维护本地列表
+    - 只维护 Match 记录
     """
     
     def __init__(self, queue: Optional[JobQueueService] = None):
@@ -36,17 +36,15 @@ class MatchingService:
         
         Args:
             queue: Job 队列服务 (注入依赖)
-                   如果为 None，使用全局单例
         """
         # 依赖注入
         self._queue = queue
         
-        # 内存存储（Node、Match 和本地 Pending Jobs）
-        self._online_nodes: dict[str, Node] = {}
-        self._pending_jobs: dict[str, Job] = {}  # 本地待撮合队列（向后兼容）
+        # 只维护 Match 记录，不维护 Node 列表
         self._matches: dict[str, Match] = {}
         self._job_to_match: dict[str, str] = {}  # job_id -> match_id
         self._node_jobs: dict[str, str] = {}  # node_id -> match_id
+        self._pending_jobs: dict[str, Job] = {}  # 本地待撮合队列
     
     @property
     def queue(self) -> JobQueueService:
@@ -75,19 +73,6 @@ class MatchingService:
     def remove_job(self, job_id: str) -> None:
         """从队列移除 Job"""
         self._pending_jobs.pop(job_id, None)  # 从本地队列移除
-    
-    def register_node(self, node: Node) -> None:
-        """注册节点"""
-        self._online_nodes[node.node_id] = node
-    
-    def update_node_status(self, node_id: str, status: NodeStatus) -> None:
-        """更新节点状态"""
-        if node_id in self._online_nodes:
-            self._online_nodes[node_id].status = status
-    
-    def unregister_node(self, node_id: str) -> None:
-        """注销节点"""
-        self._online_nodes.pop(node_id, None)
     
     def trigger_match(self, job_id: str) -> Optional[Match]:
         """
@@ -155,13 +140,7 @@ class MatchingService:
         if not node_status_store.is_online(node_id, max_age_seconds=10):
             return None
         
-        # 获取节点信息（从 DB 或内存）
-        node = self._online_nodes.get(node_id)
-        if not node:
-            # 节点不在内存中，无法匹配
-            return None
-        
-        # 从 Queue 获取待匹配 Jobs
+        # 从 NodeStatusStore 获取实时状态
         pending_jobs_data = self.queue.get_pending_jobs()
         
         if not pending_jobs_data:
@@ -204,6 +183,93 @@ class MatchingService:
         
         return None
     
+    def poll_node(self, node_id: str) -> Optional[Match]:
+        """
+        节点拉取时触发撮合
+        
+        从 NodeStatusStore 获取节点状态和容量信息
+        """
+        # 查找该节点是否已被匹配
+        if node_id in self._node_jobs:
+            match_id = self._node_jobs[node_id]
+            return self._matches.get(match_id)
+        
+        # 从 NodeStatusStore 检查节点是否在线（10秒内有更新）
+        from .node_status_store import node_status_store
+        if not node_status_store.is_online(node_id, max_age_seconds=10):
+            return None
+        
+        # 从 NodeStatusStore 获取实时状态
+        node_status = node_status_store.get_node_status(node_id)
+        
+        # 从 DB 获取节点信息
+        from ..database import SessionLocal
+        from ..repositories import NodeRepository
+        db = SessionLocal()
+        try:
+            node_repo = NodeRepository(db)
+            db_node = node_repo.get(node_id)
+            if not db_node:
+                return None
+            
+            # 构建 Node 对象（用于匹配检查）
+            import json
+            runtime_data = json.loads(db_node.runtime) if isinstance(db_node.runtime, str) else {}
+            model_support = json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else []
+            
+            node = Node(
+                node_id=db_node.node_id,
+                user_id=db_node.user_id,
+                runtime=runtime_data or {'type': 'ollama', 'loaded_models': []},
+                hardware={'gpu_type': db_node.gpu_type, 'gpu_count': db_node.gpu_count},
+                reliability={'avg_latency_ms': db_node.avg_latency, 'success_rate': 0.95, 'quality_score': 0.9},
+                pricing={'ask_price_usdc_per_mtoken': db_node.ask_price},
+                location={'region': db_node.region},
+            )
+            # 设置实时容量（从 NodeStatusStore）
+            node.state.available_concurrency = node_status.get('available_concurrency', 1)
+            node.state.available_queue_tokens = node_status.get('available_queue_tokens', 1500)
+        finally:
+            db.close()
+        
+        # 从 Queue 获取待匹配 Jobs
+        pending_jobs_data = self.queue.get_pending_jobs()
+        if not pending_jobs_data:
+            return None
+        
+        # 分离：通用任务 和 指定模型任务
+        generic_jobs = []
+        model_jobs = []
+        for job_data in pending_jobs_data:
+            job = Job(**job_data)
+            if not job.model:
+                generic_jobs.append(job)
+            else:
+                model_jobs.append(job)
+        
+        # 1. 先处理指定模型的 Jobs
+        for job in model_jobs:
+            if self._can_match(job, node, node_status):
+                match = self._create_match(job, node)
+                if match:
+                    self.queue.acknowledge(job.job_id)
+                    return match
+        
+        # 2. 再处理通用 Jobs
+        if generic_jobs:
+            sorted_generic = sorted(
+                generic_jobs,
+                key=lambda j: (-self._get_match_score(j, node), j.created_at)
+            )
+            for job in sorted_generic:
+                if self._can_match(job, node, node_status):
+                    match = self._create_match(job, node)
+                    if match:
+                        self.queue.acknowledge(job.job_id)
+                        return match
+        
+        return None
+    
     def get_match(self, match_id: str) -> Optional[Match]:
         """获取 Match"""
         return self._matches.get(match_id)
@@ -214,18 +280,11 @@ class MatchingService:
         return self._matches.get(match_id) if match_id else None
     
     def get_node_prelock_jobs(self, node_id: str) -> List[Job]:
-        """
-        获取节点的 Pre-lock Jobs
-        
-        通过 node_id 查找对应的 Match，再获取 Match 的 Job
-        """
+        """获取节点的 Pre-lock Jobs"""
         prelock_jobs = []
-        
-        # 遍历所有 matches，找到该节点匹配的 jobs
         for match_id, match in self._matches.items():
             if match.node_id == node_id:
                 job_id = match.job_id
-                # 从 Queue 获取
                 pending = self.queue.get_pending_jobs()
                 for job_data in pending:
                     if job_data.get("job_id") == job_id:
@@ -233,54 +292,64 @@ class MatchingService:
                         if job.status == JobStatus.PRE_LOCKED:
                             prelock_jobs.append(job)
                         break
-        
         return prelock_jobs
     
     def _match(self, job: Job) -> Optional[Match]:
-        """
-        执行撮合逻辑
+        """执行撮合逻辑（从 NodeStatusStore 获取节点列表）"""
+        from .node_status_store import node_status_store
         
-        撮合条件（全部满足）:
-        - job.bid_price <= node.ask_price
-        - node.avg_latency <= job.max_latency
-        - node.status == "online"
-        - node.model_support contains job.model
-        """
-        # 筛选可用节点
-        candidates = [
-            n for n in self._online_nodes.values()
-            if n.status == NodeStatus.ONLINE
-            and self._can_match(job, n)
-        ]
+        # 从 DB 获取所有在线节点（通过 NodeStatusStore 检查在线状态）
+        from ..database import SessionLocal
+        from ..repositories import NodeRepository
+        import json
+        
+        db = SessionLocal()
+        try:
+            node_repo = NodeRepository(db)
+            all_nodes = node_repo.list_all()  # 需要实现 list_all
+            
+            # 筛选在线节点（通过 NodeStatusStore 检查）
+            candidates = []
+            for db_node in all_nodes:
+                if not node_status_store.is_online(db_node.node_id, max_age_seconds=10):
+                    continue
+                
+                node_status = node_status_store.get_node_status(db_node.node_id)
+                
+                runtime_data = json.loads(db_node.runtime) if isinstance(db_node.runtime, str) else {}
+                model_support = json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else []
+                
+                node = Node(
+                    node_id=db_node.node_id,
+                    user_id=db_node.user_id,
+                    runtime=runtime_data or {'type': 'ollama', 'loaded_models': []},
+                    hardware={'gpu_type': db_node.gpu_type, 'gpu_count': db_node.gpu_count},
+                    reliability={'avg_latency_ms': db_node.avg_latency, 'success_rate': 0.95, 'quality_score': 0.9},
+                    pricing={'ask_price_usdc_per_mtoken': db_node.ask_price},
+                    location={'region': db_node.region},
+                )
+                node.state.available_concurrency = node_status.get('available_concurrency', 1)
+                node.state.available_queue_tokens = node_status.get('available_queue_tokens', 1500)
+                
+                if self._can_match(job, node, node_status):
+                    candidates.append(node)
+        finally:
+            db.close()
         
         if not candidates:
             return None
         
-        # 策略：最低 ask_price 优先，同价延迟最低优先
+        # 策略：最低 ask_price 优先
         candidates.sort(key=lambda n: (n.ask_price, n.avg_latency))
-        
-        node = candidates[0]
-        return self._create_match(job, node)
+        return self._create_match(job, candidates[0])
     
-    def _can_match(self, job: Job, node: Node) -> bool:
-        """检查是否可以撮合 (DCM v3.2)
-        
-        匹配条件（必须全部满足）：
-        1. 模型匹配：job.model in node.model_support (如果不指定模型则跳过)
-        2. 价格匹配：job.bid_price <= node.ask_price
-        3. 延迟匹配：node.avg_latency <= job.max_latency
-        4. 队列匹配：node.available_queue >= job_tokens (DCM v3.2)
-        
-        注意：节点在线状态由 NodeStatusStore 统一管理（poll_node 已检查）
-        """
+    def _can_match(self, job: Job, node: Node, node_status: dict = None) -> bool:
+        """检查是否可以撮合 (从 NodeStatusStore 获取容量)"""
         # 1. 模型匹配
-        #    - 如果 job.model 有值 → 必须匹配
-        #    - 如果 job.model 为空 → 通用任务，任何模型都可以
         if job.model and job.model not in node.model_support:
             return False
         
         # 2. 价格匹配
-        # Job 的出价必须 >= Node 的要价，否则无法成交
         if job.bid_price < node.ask_price:
             return False
         
@@ -288,14 +357,12 @@ class MatchingService:
         if node.avg_latency > job.max_latency:
             return False
         
-        # 4. 队列容量检查
-        job_tokens = job.input_tokens + job.output_tokens_limit
-        if not node.is_idle():
-            return False
-        if not node.queue_info.reserve(job_tokens):
-            return False
-        # 释放预留（实际预留会在 create_match 中处理）
-        node.queue_info.release(job_tokens)
+        # 4. 容量检查（从 node_status 获取）
+        if node_status:
+            available_tokens = node_status.get('available_queue_tokens', 0)
+            job_tokens = job.input_tokens + job.output_tokens_limit
+            if available_tokens < job_tokens:
+                return False
         
         return True
     
@@ -390,12 +457,8 @@ class MatchingService:
                 logger.info(f"Node released: {node_id}, queue released: {tokens}")
     
     def get_pending_jobs_count(self) -> int:
-        """获取待撮合 Job 数量（本地队列）"""
-        return len(self._pending_jobs)
-    
-    def get_online_nodes_count(self) -> int:
-        """获取在线节点数量"""
-        return sum(1 for n in self._online_nodes.values() if n.status == NodeStatus.ONLINE)
+        """获取待撮合 Job 数量"""
+        return len(self.queue.get_pending_jobs())
     
     def get_queue_stats(self):
         """获取队列统计"""

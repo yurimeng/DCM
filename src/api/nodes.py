@@ -91,8 +91,7 @@ async def register_node(
     # 3. 更新用户的 node_ids（系统自动维护）
     user_repo.add_node_to_user(user_id, node.node_id)
     
-    # 4. 注册到撮合引擎（内存）
-    matching_service.register_node(node)
+    # 4. 注册到撮合引擎（已移除，matching_service 从 NodeStatusStore 读取节点状态）
     
     # 5. 立即上报首次状态（使节点立即在线）
     from ..services.node_status_store import update_node_status
@@ -226,7 +225,6 @@ async def node_online(
         location={'region': db_node.region},
     )
     node_model.state.status = 'online'
-    matching_service.register_node(node_model)
     
     return {
         "node_id": node_id,
@@ -243,10 +241,6 @@ async def node_offline(
     """节点下线"""
     node_repo = NodeRepository(db)
     node_repo.update(node_id, status=NodeStatus.OFFLINE)
-    
-    # 更新内存服务
-    matching_service.update_node_status(node_id, NodeStatus.OFFLINE)
-    matching_service.unregister_node(node_id)
     
     return {
         "node_id": node_id,
@@ -281,8 +275,7 @@ async def delete_node(
     if user_id:
         user_repo.remove_node_from_user(user_id, node_id)
     
-    # 从撮合引擎移除
-    matching_service.unregister_node(node_id)
+    # NodeStatusStore 会自动清理（TTL过期）
     
     # 删除节点记录
     node_repo.delete(node_id)
@@ -707,60 +700,12 @@ async def node_heartbeat(
         node_repo.update(node_id, **update_fields)
         logger.info(f"Node {node_id} updated via heartbeat: {list(update_fields.keys())}")
     
-    # 同步到 matching_service 内存状态
-    if db_node.status == NodeStatusDB.ONLINE:
-        # 使用心跳中的 runtime/model（如果有）或数据库中的值
-        import json
-        runtime_data = heartbeat_data.get("runtime") or (json.loads(db_node.runtime) if isinstance(db_node.runtime, str) else {'type': 'ollama', 'loaded_models': []})
-        gpu_type = heartbeat_data.get("gpu_type") or db_node.gpu_type or 'unknown'
-        
-        from ..models import Node
-        node = Node(
-            node_id=db_node.node_id,
-            user_id=db_node.user_id,
-            runtime=runtime_data,
-            hardware={'gpu_type': gpu_type, 'gpu_count': db_node.gpu_count},
-            reliability={'avg_latency_ms': db_node.avg_latency or 0},
-            pricing={'ask_price_usdc_per_mtoken': db_node.ask_price or 0.5},
-            location={'region': db_node.region or 'unknown'},
-        )
-        node.state.status = 'online'
-        
-        matching_service.register_node(node)
-        matching_service.update_node_status(node_id, NodeStatus.ONLINE)
+    # 检查节点是否在 NodeStatusStore 中（无需手动注册）
+    from ..services.node_status_store import node_status_store
+    is_online = node_status_store.is_online(node_id, max_age_seconds=10)
+    re_register = not is_online and db_node.status == NodeStatusDB.ONLINE
     
-    # 检查节点是否在 matching_service 中
-    re_register = False
-    if node_id not in matching_service._online_nodes:
-        # 节点不在内存中，尝试重新注册
-        if db_node.status == NodeStatusDB.ONLINE:
-            from ..models import Node
-            import json
-            
-            # 解析 runtime JSON
-            runtime_data = json.loads(db_node.runtime) if isinstance(db_node.runtime, str) else {'type': 'ollama', 'loaded_models': []}
-            model_support = json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else []
-            
-            node = Node(
-                node_id=db_node.node_id,
-                user_id=db_node.user_id,
-                runtime=runtime_data,
-                hardware={'gpu_type': db_node.gpu_type, 'gpu_count': db_node.gpu_count},
-                reliability={'avg_latency_ms': db_node.avg_latency},
-                pricing={'ask_price_usdc_per_mtoken': db_node.ask_price},
-                location={'region': db_node.region},
-            )
-            node.state.status = 'online'
-            
-            try:
-                matching_service.register_node(node)
-                matching_service.update_node_status(node_id, NodeStatus.ONLINE)
-            except:
-                re_register = True
-        else:
-            re_register = True
-    
-    # 获取 Pre-lock Jobs (通过内存服务)
+    # 获取 Pre-lock Jobs (通过 matching_service)
     pre_lock_jobs = []
     try:
         # 通过内存服务获取 Pre-lock Jobs
@@ -783,7 +728,7 @@ async def node_heartbeat(
         "node_id": node_id,
         "status": heartbeat_data.get("status", "idle"),
         "timestamp": int(datetime.utcnow().timestamp() * 1000),
-        "matched": node_id in matching_service._online_nodes,
+        "is_online": is_online,
         "re_register": re_register,
         "pre_lock_jobs": pre_lock_jobs,
         "pre_lock_count": len(pre_lock_jobs),
