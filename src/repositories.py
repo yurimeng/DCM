@@ -136,6 +136,7 @@ class NodeRepository:
         
         db_node = NodeDB(
             node_id=node.node_id,
+            user_id=node.user_id,  # 用户 ID
             gpu_type=gpu_type,
             vram_gb=vram_gb,
             gpu_count=gpu_count,
