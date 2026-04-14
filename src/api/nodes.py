@@ -315,7 +315,13 @@ async def poll_job(
         return NodePollResponse(has_job=False)
     
     # 触发撮合（内存服务）
-    match = matching_service.poll_node(node_id)
+    try:
+        match = matching_service.poll_node(node_id)
+    except Exception as e:
+        logger.error(f"poll_node error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
     
     if match:
         # 更新 Escrow.match_id (修复关联问题)
