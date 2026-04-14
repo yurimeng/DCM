@@ -90,13 +90,14 @@ class InMemoryJobQueue(JobQueueService):
         
         # 支持 model 或 model_requirement 字段
         model = job_data.get("model") or job_data.get("model_requirement")
+        # model 可选，不指定则由系统分配
         bid_price = job_data.get("bid_price")
         job_id = job_data.get("job_id")
         
         if not job_id:
             raise InvalidJobError("Missing required field: job_id")
-        if not model:
-            raise InvalidJobError("Missing required field: model or model_requirement")
+        if not job_id:
+            raise InvalidJobError("Missing required field: job_id")
         if not bid_price and bid_price != 0:
             raise InvalidJobError("Missing required field: bid_price")
         
