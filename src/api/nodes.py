@@ -25,6 +25,17 @@ from ..services.settlement_config import settlement_config
 router = APIRouter(prefix="/nodes", tags=["nodes"])
 
 
+def _debug_error(e: Exception, context: str = "") -> HTTPException:
+    """统一错误处理 (debug 模式返回详细信息)"""
+    if settings.debug:
+        import traceback
+        logger.error(f"{context}: {e}\n{traceback.format_exc()}")
+        return HTTPException(status_code=500, detail=f"{context}: {e}")
+    else:
+        logger.error(f"{context}: {e}")
+        return HTTPException(status_code=500, detail="Internal Server Error")
+
+
 def _safe_status(status) -> str:
     """安全获取状态值"""
     if hasattr(status, 'value'):
@@ -429,6 +440,7 @@ async def submit_result(
     
     try:
         job = Job(
+            user_id=db_job.user_id or "",
             model=db_job.model,
             input_tokens=db_job.input_tokens,
             output_tokens_limit=db_job.output_tokens_limit,
@@ -437,8 +449,7 @@ async def submit_result(
         )
         job.job_id = db_job.job_id
     except Exception as e:
-        logger.error(f"Job construct error: {e}, db_job={db_job}")
-        raise HTTPException(status_code=500, detail=f"Job construct error: {e}")
+        raise _debug_error(e, "Job construct error")
     
     # Layer 1 验证
     layer1_passed, _ = verification_service.verify_layer1(
