@@ -31,6 +31,7 @@ class JobRepository:
         """创建 Job"""
         db_job = JobDB(
             job_id=job.job_id,
+            user_id=job.user_id,
             model=job.model,
             input_tokens=job.input_tokens,
             output_tokens_limit=job.output_tokens_limit,

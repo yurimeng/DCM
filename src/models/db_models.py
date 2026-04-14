@@ -53,7 +53,8 @@ class JobDB(Base):
     __tablename__ = "jobs"
     
     job_id = Column(String(36), primary_key=True)
-    model = Column(String(50), nullable=False, default="qwen2.5:7b")
+    user_id = Column(String(36), nullable=True)  # 用户 ID
+    model = Column(String(50), nullable=True, default="qwen2.5:7b")
     input_tokens = Column(Integer, nullable=False)
     output_tokens_limit = Column(Integer, nullable=False)
     max_latency = Column(Integer, nullable=False)
