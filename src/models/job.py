@@ -76,6 +76,9 @@ class JobCreate(BaseModel):
     约束从 job_config 读取
     messages 取代 prompt，支持上下文
     """
+    # 用户 ID（必填）
+    user_id: str = Field(..., description="用户 ID（必填）")
+    
     # 模型字段（可选，不指定则由系统分配排名第一的 Cluster）
     model: Optional[str] = Field(None, description="模型名称（可选）")
     model_family: Optional[str] = Field(None, description="模型家族，如 qwen, llama（可选）")
