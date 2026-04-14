@@ -39,6 +39,7 @@ class Capability(BaseModel):
 class Pricing(BaseModel):
     """市场报价 (用户定义，随时可调整)"""
     ask_price_usdc_per_mtoken: float = Field(default=0.5, gt=0, description="报价 (USDC/1M tokens)")
+    avg_latency_ms: int = Field(default=100, ge=0, description="平均延迟 (ms)")
 
 
 class Reliability(BaseModel):
@@ -279,8 +280,12 @@ class NodeResponse(BaseModel):
     user_id: str
     status: str
     stake_required: float
+    stake_amount: float
     gpu_type: str
     gpu_count: int
+    slot_count: int = 0
+    worker_count: int = 0
+    next_step: Optional[str] = None
 
 
 class NodePollResponse(BaseModel):

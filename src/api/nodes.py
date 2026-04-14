@@ -61,13 +61,23 @@ async def register_node(
     # 1. Create Node Pydantic model with nested structure
     # 创建 Node Pydantic 模型（使用嵌套结构）
     from ..models import Node
+    
+    # 从请求中提取 avg_latency_ms（默认100）
+    avg_latency_ms = 100
+    if node_create.pricing and hasattr(node_create.pricing, 'avg_latency_ms'):
+        avg_latency_ms = node_create.pricing.avg_latency_ms or 100
+    
+    # 如果请求中有 avg_latency_ms，使用它更新 pricing
+    pricing_data = node_create.pricing.model_dump() if node_create.pricing else {'ask_price_usdc_per_mtoken': 0.5}
+    pricing_data['avg_latency_ms'] = avg_latency_ms
+    
     node = Node(
         node_id=str(uuid.uuid4()),
         user_id=user_id,
         runtime=node_create.runtime or {'type': 'ollama', 'loaded_models': []},
         hardware=node_create.hardware or {'gpu_type': 'unknown', 'gpu_count': 1},
-        reliability={'avg_latency_ms': node_create.pricing.avg_latency_ms if node_create.pricing else 0},
-        pricing=node_create.pricing or {'ask_price_usdc_per_mtoken': 0.5},
+        reliability={'avg_latency_ms': avg_latency_ms},
+        pricing=pricing_data,
         location=node_create.location or {'region': 'unknown'},
     )
     node.economy.stake_tier = 'personal'
@@ -83,13 +93,15 @@ async def register_node(
     # 4. 注册到撮合引擎（内存）
     matching_service.register_node(node)
     
-    # 4. 响应
+    # 5. 响应
     return NodeResponse(
         node_id=node.node_id,
+        user_id=user_id,
         status=NodeStatus(_safe_status(db_node.status)),
         stake_required=db_node.stake_required,
-        stake_amount=db_node.stake_amount,
+        gpu_type=node.hardware.gpu_type,
         gpu_count=node.hardware.gpu_count,
+        stake_amount=db_node.stake_amount,
         slot_count=0,  # MVP: no slots
         worker_count=0,  # MVP: no workers
         next_step=f"Deposit {db_node.stake_required} USDC to activate",
