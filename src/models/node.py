@@ -213,6 +213,26 @@ class Node(BaseModel):
         return self.pricing.ask_price_usdc_per_mtoken
     
     @property
+    def model_support(self) -> List[str]:
+        """兼容属性：返回 runtime.loaded_models"""
+        return self.runtime.loaded_models
+    
+    @property
+    def avg_latency(self) -> int:
+        """兼容属性：返回 reliability.avg_latency_ms"""
+        return self.reliability.avg_latency_ms
+    
+    @property
+    def avg_success_rate(self) -> float:
+        """兼容属性：返回 reliability.success_rate"""
+        return self.reliability.success_rate
+    
+    @property
+    def avg_quality_score(self) -> float:
+        """兼容属性：返回 reliability.quality_score"""
+        return self.reliability.quality_score
+    
+    @property
     def available_concurrency(self) -> int:
         return self.state.available_concurrency
     

@@ -93,7 +93,48 @@ async def register_node(
     # 4. 注册到撮合引擎（内存）
     matching_service.register_node(node)
     
-    # 5. 响应
+    # 5. 立即上报首次状态（使节点立即在线）
+    from ..services.node_status_store import update_node_status
+    import time
+    current_time_ms = int(time.time() * 1000)
+    
+    # Live Status（实时状态）
+    live_status = {
+        "timestamp": current_time_ms,
+        "status": {
+            "state": "idle",
+            "vram_used_gb": 0,
+            "vram_total_gb": node.hardware.vram_per_gpu_gb or 80,
+        },
+        "capacity": {
+            "max_concurrency_available": node.capability.max_concurrency_total,
+            "max_concurrency_total": node.capability.max_concurrency_total,
+        },
+        "load": {
+            "active_jobs": 0,
+            "available_token_capacity": node.capability.max_queue_tokens,
+        },
+    }
+    update_node_status(node.node_id, live_status)
+    
+    # Capacity Report（容量报告）
+    capacity_report = {
+        "timestamp": current_time_ms,
+        "runtime": node.runtime.model_dump() if hasattr(node.runtime, 'model_dump') else {"type": "ollama", "loaded_models": []},
+        "capacity": {
+            "max_concurrency_total": node.capability.max_concurrency_total,
+            "tokens_per_sec": node.capability.tokens_per_sec,
+            "max_queue_tokens": node.capability.max_queue_tokens,
+        },
+    }
+    # Capacity report 也更新到 status store（带不同前缀或覆盖）
+    # 更新 runtime 信息到 NodeDB
+    node_repo.update(node.node_id, 
+        runtime=json.dumps(node.runtime.model_dump()) if hasattr(node.runtime, 'model_dump') else '{}',
+        model=node.runtime.loaded_models[0] if node.runtime.loaded_models else 'unknown'
+    )
+    
+    # 6. 响应
     return NodeResponse(
         node_id=node.node_id,
         user_id=user_id,
