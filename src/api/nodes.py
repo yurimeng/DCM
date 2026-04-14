@@ -67,9 +67,16 @@ async def register_node(
     if node_create.pricing and hasattr(node_create.pricing, 'avg_latency_ms'):
         avg_latency_ms = node_create.pricing.avg_latency_ms or 100
     
-    # 如果请求中有 avg_latency_ms，使用它更新 pricing
-    pricing_data = node_create.pricing.model_dump() if node_create.pricing else {'ask_price_usdc_per_mtoken': 0.5}
-    pricing_data['avg_latency_ms'] = avg_latency_ms
+    # 直接从 pricing 对象获取 ask_price_usdc_per_mtoken
+    # 使用 getattr 防止属性不存在时报错
+    ask_price_value = 0.5  # 默认值
+    if node_create.pricing:
+        ask_price_value = getattr(node_create.pricing, 'ask_price_usdc_per_mtoken', 0.5)
+    
+    pricing_data = {
+        'ask_price_usdc_per_mtoken': ask_price_value,
+        'avg_latency_ms': avg_latency_ms,
+    }
     
     node = Node(
         node_id=str(uuid.uuid4()),
