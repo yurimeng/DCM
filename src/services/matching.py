@@ -386,30 +386,13 @@ class MatchingService:
         return match
     
     def release_node(self, node_id: str, tokens: int = 0) -> None:
-        """释放节点（Job 完成后）(DCM v3.2)
+        """释放节点（Job 完成后）
         
-        Args:
-            node_id: 节点 ID
-            tokens: 释放的 token 数量 (从 Job 获取)
+        从 _node_jobs 中移除节点映射
         """
         if node_id in self._node_jobs:
-            match_id = self._node_jobs[node_id]
-            match = self._matches.get(match_id)
-            if match:
-                # 获取 Job 的 token 数
-                job = self._pending_jobs.get(match.job_id)
-                if job:
-                    tokens = self._get_job_tokens(job)
-            
             del self._node_jobs[node_id]
-        
-        if node_id in self._online_nodes:
-            node = self._online_nodes[node_id]
-            node.status = NodeStatus.ONLINE
-            # 释放队列容量 (DCM v3.2)
-            if tokens > 0:
-                node.queue_info.release(tokens)
-                logger.info(f"Node released: {node_id}, queue released: {tokens}")
+            logger.info(f"Node released: {node_id}")
     
     def get_pending_jobs_count(self) -> int:
         """获取待撮合 Job 数量"""
