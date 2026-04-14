@@ -2,7 +2,7 @@
 
 > A decentralized AI inference marketplace where anyone can buy or sell computing power.
 > 
-> **Version**: v3.1 | **Status**: MVP (Validation)
+> **Version**: v3.2 | **Status**: MVP (Validation)
 
 ---
 
