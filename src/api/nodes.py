@@ -503,8 +503,6 @@ async def submit_result(
             logger.info(f"✅ 自动结算完成: job={job_id}, cost={actual_cost}, node_earn={node_earn}")
     except Exception as e:
         logger.error(f"结算失败: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
     
     response = {
         "received": True,
