@@ -424,14 +424,21 @@ async def submit_result(
     job_repo = JobRepository(db)
     db_job = job_repo.get(job_id)
     
-    job = Job(
-        model=db_job.model,
-        input_tokens=db_job.input_tokens,
-        output_tokens_limit=db_job.output_tokens_limit,
-        max_latency=db_job.max_latency,
-        bid_price=float(db_job.bid_price),
-    )
-    job.job_id = db_job.job_id
+    if not db_job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    try:
+        job = Job(
+            model=db_job.model,
+            input_tokens=db_job.input_tokens,
+            output_tokens_limit=db_job.output_tokens_limit,
+            max_latency=db_job.max_latency,
+            bid_price=float(db_job.bid_price),
+        )
+        job.job_id = db_job.job_id
+    except Exception as e:
+        logger.error(f"Job construct error: {e}, db_job={db_job}")
+        raise HTTPException(status_code=500, detail=f"Job construct error: {e}")
     
     # Layer 1 验证
     layer1_passed, _ = verification_service.verify_layer1(
