@@ -58,43 +58,20 @@ async def register_node(
         logger.warning(f"User validation failed: {error_msg}")
         raise HTTPException(status_code=403, detail=error_msg)
     
-    # 1. Create Node Pydantic model
-    # 创建 Node Pydantic 模型
-    node_data = node_create.model_dump()
-    
-    # Generate unique node_id
-    # 生成唯一的 node_id
-    node_data['node_id'] = str(uuid.uuid4())
-    
-    # Set GPU details (from request or defaults)
-    # 设置 GPU 详细信息（从请求或默认值）
-    node_data['gpu_qty'] = node_data.get('gpu_qty') or node_data.get('gpu_count', 1) or 1
-    node_data['gpu_vram_gb'] = node_data.get('gpu_vram_gb') if node_data.get('gpu_vram_gb') is not None else float(node_data.get('vram_gb', 0)) or 0.0
-    node_data['gpu_pooled'] = node_data.get('gpu_pooled') if node_data.get('gpu_pooled') is not None else False
-    
-    # Set default model_support if not provided
-    # 如果未提供 model_support，使用 model 作为默认值
-    if not node_data.get('model_support'):
-        node_data['model_support'] = [node_data.get('model', '')]
-    
-    # System info metadata
-    # 系统信息元数据
-    node_data['metadata'] = {
-        # User binding / 用户绑定
-        'user_id': user_id,
-        # GPU Details / GPU 详细信息
-        'gpu_qty': node_data['gpu_qty'],
-        'gpu_vram_gb': node_data['gpu_vram_gb'],
-        'gpu_pooled': node_data['gpu_pooled'],
-        # OS Info / 操作系统信息
-        'os_name': node_data.get('os_name', ''),
-        'os_version': node_data.get('os_version', ''),
-        'hostname': node_data.get('hostname', ''),
-        # Tags / 自定义标签
-        'tags': [],
-    }
-    
-    node = Node(**node_data)
+    # 1. Create Node Pydantic model with nested structure
+    # 创建 Node Pydantic 模型（使用嵌套结构）
+    from ..models import Node
+    node = Node(
+        node_id=str(uuid.uuid4()),
+        user_id=user_id,
+        runtime=node_create.runtime or {'type': 'ollama', 'loaded_models': []},
+        hardware=node_create.hardware or {'gpu_type': 'unknown', 'gpu_count': 1},
+        reliability={'avg_latency_ms': node_create.pricing.avg_latency_ms if node_create.pricing else 0},
+        pricing=node_create.pricing or {'ask_price_usdc_per_mtoken': 0.5},
+        location=node_create.location or {'region': 'unknown'},
+    )
+    node.economy.stake_tier = 'personal'
+    node.state.status = 'online'
     
     # 2. 保存到数据库
     node_repo = NodeRepository(db)
@@ -112,9 +89,9 @@ async def register_node(
         status=NodeStatus(_safe_status(db_node.status)),
         stake_required=db_node.stake_required,
         stake_amount=db_node.stake_amount,
-        gpu_count=node.gpu_count,
-        slot_count=len(node.slot_ids),
-        worker_count=len(node.worker_ids),
+        gpu_count=node.hardware.gpu_count,
+        slot_count=0,  # MVP: no slots
+        worker_count=0,  # MVP: no workers
         next_step=f"Deposit {db_node.stake_required} USDC to activate",
     )
 
@@ -180,20 +157,21 @@ async def node_online(
     # 注册节点到撮合引擎（内存服务）
     from ..models import Node
     import json
+    
+    # 解析 runtime JSON
+    runtime_data = json.loads(db_node.runtime) if isinstance(db_node.runtime, str) else {'type': 'ollama', 'loaded_models': []}
+    model_support = json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else (db_node.model_support or [])
+    
     node_model = Node(
         node_id=node_id,
-        gpu_type=db_node.gpu_type,
-        vram_gb=db_node.vram_gb,
-        # Required: runtime and model
-        # 必填：runtime 和 model
-        runtime=db_node.runtime,
-        model=db_node.model,
-        model_support=json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else (db_node.model_support or []),
-        ask_price=float(db_node.ask_price),
-        avg_latency=int(db_node.avg_latency),
-        region=db_node.region,
+        user_id=db_node.user_id,
+        runtime=runtime_data,
+        hardware={'gpu_type': db_node.gpu_type, 'gpu_count': db_node.gpu_count},
+        reliability={'avg_latency_ms': db_node.avg_latency},
+        pricing={'ask_price_usdc_per_mtoken': db_node.ask_price},
+        location={'region': db_node.region},
     )
-    node_model.status = NodeStatus.ONLINE
+    node_model.state.status = 'online'
     matching_service.register_node(node_model)
     
     return {
@@ -281,8 +259,12 @@ async def poll_job(
     # 更新心跳
     node_repo.update_heartbeat(node_id)
     
-    # 检查节点是否在线
-    if db_node.status != NodeStatusDB.ONLINE:
+    # 检查节点是否在线（基于 10 秒内的 live_status）
+    from ..services.node_status_store import node_status_store
+    is_recent = node_status_store.is_online(node_id, max_age_seconds=10)
+    
+    # DB 状态为 ONLINE 且最近有 live_status 报告则视为在线
+    if db_node.status != NodeStatusDB.ONLINE and not is_recent:
         return NodePollResponse(has_job=False)
     
     # 触发撮合（内存服务）
@@ -674,23 +656,22 @@ async def node_heartbeat(
     # 同步到 matching_service 内存状态
     if db_node.status == NodeStatusDB.ONLINE:
         # 使用心跳中的 runtime/model（如果有）或数据库中的值
-        runtime = heartbeat_data.get("runtime") or db_node.runtime or 'ollama'
-        model = heartbeat_data.get("model") or db_node.model or 'qwen2.5:7b'
+        import json
+        runtime_data = heartbeat_data.get("runtime") or (json.loads(db_node.runtime) if isinstance(db_node.runtime, str) else {'type': 'ollama', 'loaded_models': []})
         gpu_type = heartbeat_data.get("gpu_type") or db_node.gpu_type or 'unknown'
-        vram_gb = heartbeat_data.get("vram_gb") or db_node.vram_gb or 0
         
         from ..models import Node
         node = Node(
             node_id=db_node.node_id,
-            gpu_type=gpu_type,
-            vram_gb=vram_gb,
-            model_support=json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else (db_node.model_support or []),
-            ask_price=float(db_node.ask_price),
-            avg_latency=int(db_node.avg_latency),
-            region=db_node.region,
-            runtime=runtime,
-            model=model,
+            user_id=db_node.user_id,
+            runtime=runtime_data,
+            hardware={'gpu_type': gpu_type, 'gpu_count': db_node.gpu_count},
+            reliability={'avg_latency_ms': db_node.avg_latency or 0},
+            pricing={'ask_price_usdc_per_mtoken': db_node.ask_price or 0.5},
+            location={'region': db_node.region or 'unknown'},
         )
+        node.state.status = 'online'
+        
         matching_service.register_node(node)
         matching_service.update_node_status(node_id, NodeStatus.ONLINE)
     
@@ -700,18 +681,23 @@ async def node_heartbeat(
         # 节点不在内存中，尝试重新注册
         if db_node.status == NodeStatusDB.ONLINE:
             from ..models import Node
+            import json
+            
+            # 解析 runtime JSON
+            runtime_data = json.loads(db_node.runtime) if isinstance(db_node.runtime, str) else {'type': 'ollama', 'loaded_models': []}
+            model_support = json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else []
+            
             node = Node(
                 node_id=db_node.node_id,
-                gpu_type=db_node.gpu_type,
-                vram_gb=db_node.vram_gb,
-                model_support=json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else (db_node.model_support or []),
-                ask_price=float(db_node.ask_price),
-                avg_latency=int(db_node.avg_latency),
-                region=db_node.region,
-                # Required fields from NodeDB
-                runtime=db_node.runtime or 'ollama',
-                model=db_node.model or 'qwen2.5:7b',
+                user_id=db_node.user_id,
+                runtime=runtime_data,
+                hardware={'gpu_type': db_node.gpu_type, 'gpu_count': db_node.gpu_count},
+                reliability={'avg_latency_ms': db_node.avg_latency},
+                pricing={'ask_price_usdc_per_mtoken': db_node.ask_price},
+                location={'region': db_node.region},
             )
+            node.state.status = 'online'
+            
             try:
                 matching_service.register_node(node)
                 matching_service.update_node_status(node_id, NodeStatus.ONLINE)

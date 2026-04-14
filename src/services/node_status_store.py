@@ -214,6 +214,31 @@ class NodeStatusStore:
         
         return available
 
+    def is_online(self, node_id: str, max_age_seconds: int = 10) -> bool:
+        """
+        检查 Node 是否在线（最近 N 秒有更新）
+        
+        Args:
+            node_id: Node ID
+            max_age_seconds: 最大间隔秒数（默认10秒）
+            
+        Returns:
+            True if node has recent status update
+        """
+        status = self.get(node_id)
+        if not status:
+            return False
+        
+        timestamp = status.get("timestamp", 0)
+        if not timestamp:
+            return False
+        
+        import time
+        current_time_ms = int(time.time() * 1000)
+        age_seconds = (current_time_ms - timestamp) / 1000
+        
+        return age_seconds <= max_age_seconds
+
 
 # ===== 全局实例（延迟初始化）=====
 
