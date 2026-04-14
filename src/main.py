@@ -8,8 +8,64 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from config import settings
-from .api import jobs_router, nodes_router, internal_router, disputes_router, wallet_router, p2p_router, quic_router, relay_router, core_router, scaler_router, worker_pool_router
+from .api import jobs_router, nodes_router, users_router, internal_router, disputes_router, wallet_router, p2p_router, quic_router, relay_router, core_router, scaler_router, worker_pool_router
 from .database import init_db, SessionLocal
+
+
+def _create_test_users():
+    """
+    Create test users for development
+    创建测试用户
+    
+    Test accounts:
+    - user1 / 123456
+    - user2 / 123456
+    - user3 / 123456
+    """
+    from .models.user import User, AuthProvider, UserRole
+    from .repositories import UserRepository
+    import uuid
+    
+    db = SessionLocal()
+    try:
+        user_repo = UserRepository(db)
+        
+        test_users = [
+            {"email": "user1@example.com", "username": "user1"},
+            {"email": "user2@example.com", "username": "user2"},
+            {"email": "user3@example.com", "username": "user3"},
+        ]
+        
+        created_count = 0
+        for test_user in test_users:
+            # Check if user exists
+            existing = user_repo.get_by_email(test_user["email"])
+            if existing:
+                print(f"  Test user {test_user['username']} already exists")
+                continue
+            
+            # Create user
+            user = User(
+                user_id=str(uuid.uuid4()),
+                auth_provider=AuthProvider.EMAIL,
+                email=test_user["email"],
+                username=test_user["username"],
+                password_hash=User.hash_password("123456"),
+                role=UserRole.USER,
+                reputation_score=0.5,
+            )
+            
+            user_repo.create(user)
+            created_count += 1
+            print(f"  Created test user: {test_user['username']} (password: 123456)")
+        
+        if created_count > 0:
+            print(f"  Created {created_count} test users")
+        
+    except Exception as e:
+        print(f"  Warning: Failed to create test users: {e}")
+    finally:
+        db.close()
 
 
 @asynccontextmanager
@@ -26,6 +82,10 @@ async def lifespan(app: FastAPI):
     
     # 从数据库加载状态到内存
     _load_matching_state()
+    
+    # 创建测试用户
+    print("Creating test users...")
+    _create_test_users()
     
     yield
     
@@ -50,15 +110,19 @@ def _load_matching_state():
         
         for db_node in online_nodes:
             node = Node(
+                node_id=db_node.node_id,
                 gpu_type=db_node.gpu_type,
                 vram_gb=db_node.vram_gb,
-                model_support=json.loads(db_node.model_support),
+                gpu_count=db_node.gpu_count,
+                # Required: runtime and model
+                runtime=db_node.runtime,
+                model=db_node.model,
+                model_support=json.loads(db_node.model_support) if db_node.model_support else [],
                 ask_price=float(db_node.ask_price),
                 avg_latency=int(db_node.avg_latency),
                 region=db_node.region,
+                status=NodeStatus.ONLINE,
             )
-            node.node_id = db_node.node_id
-            node.status = NodeStatus.ONLINE
             matching_service.register_node(node)
             print(f"  Loaded online node: {db_node.node_id[:8]}...")
         
@@ -68,12 +132,14 @@ def _load_matching_state():
         ).all()
         
         for db_job in pending_jobs:
+            # 处理 model 字段（可能为 None）- 使用 model_requirement
+            model_req = db_job.model or "generic"
             job = Job(
-                model=db_job.model,
-                input_tokens=db_job.input_tokens,
-                output_tokens_limit=db_job.output_tokens_limit,
-                max_latency=db_job.max_latency,
-                bid_price=float(db_job.bid_price),
+                model_requirement=model_req,
+                input_tokens=db_job.input_tokens or 100,
+                output_tokens_limit=db_job.output_tokens_limit or 512,
+                max_latency=db_job.max_latency or 30000,
+                bid_price=float(db_job.bid_price) if db_job.bid_price else 0.001,
             )
             job.job_id = db_job.job_id
             job.status = JobStatus.PENDING
@@ -125,6 +191,7 @@ app.add_middleware(
 # 路由
 app.include_router(jobs_router, prefix=settings.api_prefix)
 app.include_router(nodes_router, prefix=settings.api_prefix)
+app.include_router(users_router)  # Already has /api/v1/users prefix
 app.include_router(internal_router)
 app.include_router(disputes_router)
 app.include_router(wallet_router)
@@ -161,6 +228,12 @@ async def health():
 async def get_stats():
     """获取系统统计"""
     from .services import matching_service
+    from .services.queue import create_queue
+    
+    # 获取队列统计
+    queue = create_queue()
+    queue_stats = queue.get_stats()
+    queue_type = type(queue).__name__
     
     return {
         "system": {
@@ -170,6 +243,13 @@ async def get_stats():
         "matching": {
             "pending_jobs": matching_service.get_pending_jobs_count(),
             "online_nodes": matching_service.get_online_nodes_count(),
+        },
+        "queue_stats": {
+            "type": queue_type,
+            "size": queue_stats.size,
+            "max_size": queue_stats.max_size,
+            "dead_letter_size": queue_stats.dead_letter_size,
+            "usage_percent": queue_stats.usage_percent,
         },
         "config": {
             "platform_fee_rate": settings.platform_fee_rate,

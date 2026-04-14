@@ -1,0 +1,33 @@
+# DCM Node Agent Configuration
+# Node Agent 配置文件
+
+# ===== REQUIRED / 必填 =====
+dcm_url: "https://dcm-api-p00a.onrender.com"
+
+# User ID (UUID from user registration)
+# 用户 ID（用户注册后获取的 UUID）
+# Get from: POST /api/v1/users/register
+user_id: "YOUR-USER-UUID-HERE"
+
+# Runtime type / 运行时类型: ollama, vllm, tensorrt, lmstudio
+runtime: "ollama"
+
+# Model name / 模型名称: qwen2.5:7b, llama3:8b, etc.
+model: "qwen2.5:7b"
+
+# ===== OPTIONAL / 可选 =====
+gpu_count: 1
+slot_count: 4
+worker_count: 2
+poll_interval: 3
+heartbeat_interval: 30
+stake_amount: 200.0
+
+# Network configuration / 网络配置
+network_enabled: true
+p2p_enabled: false
+relay_enabled: false
+
+# Node ID (auto-generated, no need to fill)
+# 节点 ID（自动生成，无需填写）
+# node_id: "xxxx-xxxx-xxxx-xxxx"

@@ -7,7 +7,7 @@ import pytest
 from datetime import datetime
 
 from src.models import Job, JobStatus, Slot, SlotStatus, LockType, JobSet
-from src.models.slot import ModelInfo, PricingInfo, PerformanceInfo, CapacityInfo
+from src.models.cluster import ModelInfo, PricingInfo, PerformanceInfo, CapacityInfo
 from src.services.match_engine_v2 import MatchEngineV2, MatchResult, DispatchResult
 from src.services.pre_lock import PreLockService, PreLockStatus, PreLockResult
 
@@ -24,7 +24,7 @@ class TestPreLockMechanism:
     def test_slot_pre_lock_request(self):
         """测试 Slot Pre-Lock 请求"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -45,7 +45,7 @@ class TestPreLockMechanism:
     def test_slot_pre_lock_confirm(self):
         """测试 Pre-Lock 确认"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -68,7 +68,7 @@ class TestPreLockMechanism:
     def test_slot_pre_lock_expire(self):
         """测试 Pre-Lock 过期"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -87,7 +87,7 @@ class TestPreLockMechanism:
     def test_slot_multi_job_pre_lock(self):
         """测试 Slot 多 Job Pre-Lock"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -115,7 +115,7 @@ class TestPreLockMechanism:
     def test_slot_lock_release(self):
         """测试 Lock 释放"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -145,7 +145,7 @@ class TestPreLockService:
         service = PreLockService(default_ttl_ms=5000)
         
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -165,7 +165,7 @@ class TestPreLockService:
         service = PreLockService(default_ttl_ms=5000)
         
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -187,7 +187,7 @@ class TestPreLockService:
         service = PreLockService(default_ttl_ms=1)  # 1ms TTL
         
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -217,7 +217,7 @@ class TestMatchEnginePreLock:
         """E2E: 匹配 + Pre-Lock"""
         # 注册 Slot
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -238,14 +238,19 @@ class TestMatchEnginePreLock:
         )
         engine.submit_job(job)
         
-        # 匹配（包含 Pre-Lock）
+        # 匹配（空闲 Slot 直接匹配，非空闲 Slot 走 Pre-Lock）
         result = engine.match_job(job.job_id)
         
         assert result.success == True
-        assert result.pre_locked == True
-        assert result.slot is not None
+        assert result.cluster is not None
         assert result.job is not None
-        assert result.pre_lock_expires_at is not None
+        
+        # 空闲 Slot 直接匹配，pre_locked=False；非空闲才需要 Pre-Lock
+        if slot.is_idle():
+            assert result.pre_locked == False
+        else:
+            assert result.pre_locked == True
+            assert result.pre_lock_expires_at is not None
         
         # 验证 Slot 状态
         assert slot.status == SlotStatus.PARTIALLY_RESERVED
@@ -256,7 +261,7 @@ class TestMatchEnginePreLock:
         """E2E: 多 Job 并发匹配"""
         # 注册高并发 Slot
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -295,7 +300,7 @@ class TestMatchEnginePreLock:
         """E2E: Slot 满后无法匹配"""
         # 注册低并发 Slot
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=1),  # 只有 1 个并发
@@ -307,7 +312,7 @@ class TestMatchEnginePreLock:
         
         # 注册第二个 Slot
         slot2 = Slot(
-            slot_id="slot_002",
+            cluster_id="slot_002",
             node_id="node_002",
             worker_id="worker_002",
             capacity=CapacityInfo(max_concurrency=1),
@@ -330,7 +335,7 @@ class TestMatchEnginePreLock:
         result1 = engine.match_job(job1.job_id)
         
         assert result1.success == True
-        assert result1.slot.slot_id == "slot_001"
+        assert result1.cluster.cluster_id == "slot_001"
         
         # 第二个 Job 应该匹配到 slot_002
         job2 = Job(
@@ -345,13 +350,13 @@ class TestMatchEnginePreLock:
         result2 = engine.match_job(job2.job_id)
         
         assert result2.success == True
-        assert result2.slot.slot_id == "slot_002"
+        assert result2.cluster.cluster_id == "slot_002"
     
     def test_e2e_version_coverage_with_pre_lock(self, engine):
         """E2E: 版本覆盖 + Pre-Lock"""
         # 注册高版本 Slot
         slot = Slot(
-            slot_id="slot_high",
+            cluster_id="slot_high",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -376,13 +381,13 @@ class TestMatchEnginePreLock:
         result = engine.match_job(job.job_id)
         
         assert result.success == True
-        assert result.slot.model.name == "qwen3.5:latest"
+        assert result.cluster.model.name == "qwen3.5:latest"
     
     def test_e2e_version_insufficient_with_pre_lock(self, engine):
         """E2E: 版本不足 + Pre-Lock"""
         # 注册更低版本 Slot
         slot = Slot(
-            slot_id="slot_low",
+            cluster_id="slot_low",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -416,7 +421,7 @@ class TestDispatchFlow:
         """E2E: 完整分发流程"""
         # 注册 Slot
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -465,7 +470,7 @@ class TestSlotLifecycle:
     def test_slot_status_transitions(self):
         """测试 Slot 状态转换"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -497,7 +502,7 @@ class TestSlotLifecycle:
     def test_slot_capacity_updates(self):
         """测试 Slot 容量更新"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -570,7 +575,7 @@ class TestStatsTracking:
         # 注册 5 个 Slot
         for i in range(5):
             slot = Slot(
-                slot_id=f"slot_{i+1:03d}",
+                cluster_id=f"slot_{i+1:03d}",
                 node_id="node_001",
                 worker_id=f"worker_{i+1:03d}",
                 capacity=CapacityInfo(max_concurrency=4),
@@ -638,7 +643,7 @@ class TestEdgeCases:
         """Slot 满后无法匹配"""
         # 注册只有 1 个容量的 Slot
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=1),
@@ -679,7 +684,7 @@ class TestEdgeCases:
     def test_cancel_releases_pre_lock(self, engine):
         """取消 Job 释放 Pre-Lock"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),

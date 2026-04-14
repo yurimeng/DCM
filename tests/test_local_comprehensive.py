@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # ==================== 导入 DCM 模块 ====================
 
 from src.models import Job, JobStatus, Slot, SlotStatus, LockType
-from src.models.slot import ModelInfo, PricingInfo, PerformanceInfo, CapacityInfo
+from src.models.cluster import ModelInfo, PricingInfo, PerformanceInfo, CapacityInfo
 from src.services.match_engine_v2 import MatchEngineV2, MatchResult
 from src.services.pre_lock import PreLockService, PreLockStatus
 from src.services.compatibility import CompatibilityMatrix, CompatibilityLevel
@@ -106,7 +106,7 @@ def test_basic_matching():
     
     # 注册 Slot
     slot = Slot(
-        slot_id="slot_001",
+        cluster_id="slot_001",
         node_id="node_001",
         worker_id="worker_001",
         capacity=CapacityInfo(max_concurrency=4),
@@ -131,11 +131,11 @@ def test_basic_matching():
     result = engine.match_job(job.job_id)
     
     assert result.success, f"匹配失败: {result.reason}"
-    assert result.slot is not None
-    assert result.slot.slot_id == "slot_001"
+    assert result.cluster is not None
+    assert result.cluster.cluster_id == "slot_001"
     assert result.pre_locked, "应该是 Pre-Lock 模式"
     
-    logger.info(f"✅ 基础匹配成功: job={job.job_id} -> slot={result.slot.slot_id}")
+    logger.info(f"✅ 基础匹配成功: job={job.job_id} -> slot={result.cluster.cluster_id}")
     return True
 
 
@@ -146,7 +146,7 @@ def test_family_mismatch():
     
     # 注册 qwen Slot
     slot = Slot(
-        slot_id="slot_qwen",
+        cluster_id="slot_qwen",
         node_id="node_001",
         worker_id="worker_001",
         capacity=CapacityInfo(max_concurrency=4),
@@ -182,7 +182,7 @@ def test_version_coverage():
     
     # 注册高版本 Slot
     slot_high = Slot(
-        slot_id="slot_qwen35",
+        cluster_id="slot_qwen35",
         node_id="node_001",
         worker_id="worker_001",
         capacity=CapacityInfo(max_concurrency=4),
@@ -207,7 +207,7 @@ def test_version_coverage():
     result = engine.match_job(job.job_id)
     
     assert result.success, f"版本覆盖应该成功: {result.reason}"
-    assert result.slot.model.name == "qwen3.5:latest", f"匹配到了错误的 slot: {result.slot.model.name}"
+    assert result.cluster.model.name == "qwen3.5:latest", f"匹配到了错误的 slot: {result.cluster.model.name}"
     
     logger.info(f"✅ 版本覆盖成功: Job(qwen3-8b) -> Slot(qwen3.5:latest)")
 
@@ -219,7 +219,7 @@ def test_version_insufficient():
     
     # 注册低版本 Slot
     slot_low = Slot(
-        slot_id="slot_qwen25",
+        cluster_id="slot_qwen25",
         node_id="node_001",
         worker_id="worker_001",
         capacity=CapacityInfo(max_concurrency=4),
@@ -256,7 +256,7 @@ def test_concurrent_multi_job():
     
     # 注册高并发 Slot
     slot = Slot(
-        slot_id="slot_high_concurrency",
+        cluster_id="slot_high_concurrency",
         node_id="node_001",
         worker_id="worker_001",
         capacity=CapacityInfo(max_concurrency=4),
@@ -302,7 +302,7 @@ def test_capacity_overflow():
     
     # 注册低并发 Slot
     slot = Slot(
-        slot_id="slot_low_concurrency",
+        cluster_id="slot_low_concurrency",
         node_id="node_001",
         worker_id="worker_001",
         capacity=CapacityInfo(max_concurrency=4),
@@ -348,7 +348,7 @@ def test_generic_job():
     # 注册多个 Slot
     for i, (family, model) in enumerate([("qwen", "qwen3-8b"), ("llama", "llama3-8b")]):
         slot = Slot(
-            slot_id=f"slot_{i+1:03d}",
+            cluster_id=f"slot_{i+1:03d}",
             node_id="node_001",
             worker_id=f"worker_{i+1:03d}",
             capacity=CapacityInfo(max_concurrency=4),
@@ -374,7 +374,7 @@ def test_generic_job():
     
     assert result.success, f"通用任务应该能匹配: {result.reason}"
     
-    logger.info(f"✅ 通用任务匹配成功: slot={result.slot.slot_id}")
+    logger.info(f"✅ 通用任务匹配成功: slot={result.cluster.cluster_id}")
 
 
 # ==================== Pre-Lock 机制测试 ====================
@@ -383,7 +383,7 @@ def test_generic_job():
 def test_prelock_basic():
     """测试 Pre-Lock 基本流程"""
     slot = Slot(
-        slot_id="slot_prelock",
+        cluster_id="slot_prelock",
         node_id="node_001",
         worker_id="worker_001",
         capacity=CapacityInfo(max_concurrency=4),
@@ -420,7 +420,7 @@ def test_prelock_basic():
 def test_prelock_expire():
     """测试 Pre-Lock TTL 过期"""
     slot = Slot(
-        slot_id="slot_expire",
+        cluster_id="slot_expire",
         node_id="node_001",
         worker_id="worker_001",
         capacity=CapacityInfo(max_concurrency=4),
@@ -442,7 +442,7 @@ def test_prelock_expire():
 def test_prelock_multi():
     """测试多 Job 并发预占"""
     slot = Slot(
-        slot_id="slot_multi",
+        cluster_id="slot_multi",
         node_id="node_001",
         worker_id="worker_001",
         capacity=CapacityInfo(max_concurrency=4),
@@ -520,7 +520,7 @@ def test_throughput_single_slot():
     engine = MatchEngineV2()
     
     slot = Slot(
-        slot_id="slot_throughput",
+        cluster_id="slot_throughput",
         node_id="node_001",
         worker_id="worker_001",
         capacity=CapacityInfo(max_concurrency=10),
@@ -565,7 +565,7 @@ def test_load_balancing():
     # 注册 3 个 Slot
     for i in range(3):
         slot = Slot(
-            slot_id=f"slot_{i+1:03d}",
+            cluster_id=f"slot_{i+1:03d}",
             node_id="node_001",
             worker_id=f"worker_{i+1:03d}",
             capacity=CapacityInfo(max_concurrency=2),
@@ -647,7 +647,7 @@ def test_latency_constraint():
     engine = MatchEngineV2()
     
     slot = Slot(
-        slot_id="slot_slow",
+        cluster_id="slot_slow",
         node_id="node_001",
         worker_id="worker_001",
         capacity=CapacityInfo(max_concurrency=4),
@@ -680,7 +680,7 @@ def test_price_constraint():
     engine = MatchEngineV2()
     
     slot = Slot(
-        slot_id="slot_expensive",
+        cluster_id="slot_expensive",
         node_id="node_001",
         worker_id="worker_001",
         capacity=CapacityInfo(max_concurrency=4),

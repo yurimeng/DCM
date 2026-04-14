@@ -9,7 +9,7 @@ import time
 import threading
 import logging
 from enum import Enum
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, List
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -79,8 +79,16 @@ class NodeConfig:
     ollama_model: str = "qwen2.5:7b"
     ollama_timeout: int = 60
     
+    # Runtime 类型 (DCM v3.2)
+    runtime_type: str = "ollama"  # ollama, vllm, llama.cpp
+    
     node_id: str = ""
-    heartbeat_interval: int = 30
+    user_id: str = ""  # 服务器所有者
+    
+    # Status Report 间隔 (DCM v3.2)
+    capacity_report_interval: int = 30   # Node Capacity Report: 30-60秒
+    live_status_interval: int = 3        # Node Live Status: 2-5秒
+    
     max_concurrent_jobs: int = 1
     
     @property
@@ -97,7 +105,12 @@ class NodeConfig:
 
 
 class OllamaClient:
-    """Ollama API 客户端"""
+    """
+    Ollama API 客户端 (DCM v3.2 保留兼容)
+    
+    推荐使用 Runtime Protocol:
+    - src.models.runtime_protocol.OllamaAdapter
+    """
     
     def __init__(self, config: NodeConfig):
         self.config = config
@@ -144,6 +157,71 @@ class OllamaClient:
             return False
 
 
+class RuntimeClient:
+    """
+    Runtime 客户端 (DCM v3.2)
+    
+    统一的 Runtime 调用接口，支持多种推理后端:
+    - Ollama
+    - vLLM
+    - llama.cpp
+    
+    使用 Runtime Protocol:
+    - src.models.runtime_protocol.RuntimeRequest
+    - src.models.runtime_protocol.RuntimeResponse
+    """
+    
+    def __init__(self, config: NodeConfig):
+        self.config = config
+        self._adapter = None
+        self._init_adapter()
+    
+    def _init_adapter(self):
+        """初始化 Runtime 适配器"""
+        from ..models.runtime_protocol import create_runtime_adapter
+        
+        runtime_type = getattr(self.config, 'runtime_type', 'ollama')
+        
+        self._adapter = create_runtime_adapter(
+            runtime_type=runtime_type,
+            host=self.config.ollama_host,
+            port=self.config.ollama_port,
+            timeout=self.config.ollama_timeout,
+        )
+    
+    @property
+    def adapter(self):
+        """获取 Runtime 适配器"""
+        return self._adapter
+    
+    def execute(self, request) -> 'RuntimeResponse':
+        """
+        执行 Runtime 请求
+        
+        Args:
+            request: RuntimeRequest 对象
+            
+        Returns:
+            RuntimeResponse 对象
+        """
+        if self._adapter is None:
+            self._init_adapter()
+        
+        return self._adapter.generate(request)
+    
+    def is_available(self) -> bool:
+        """检查 Runtime 是否可用"""
+        if self._adapter is None:
+            self._init_adapter()
+        return self._adapter.is_available()
+    
+    def list_models(self) -> List[str]:
+        """列出可用模型"""
+        if self._adapter is None:
+            self._init_adapter()
+        return self._adapter.list_models()
+
+
 class NodeAgent:
     """Node Agent 主类"""
     
@@ -152,21 +230,102 @@ class NodeAgent:
         self.node_id = node_id
         self.status = NodeStatus.DISCONNECTED
         
-        self.ollama = OllamaClient(config)
+        # Runtime 客户端 (DCM v3.2 新增)
+        self.ollama = OllamaClient(config)  # 保留兼容
+        self.runtime = RuntimeClient(config)  # 新的统一接口
+        
         self.ws: Optional[websocket.WebSocketApp] = None
         self.ws_thread: Optional[threading.Thread] = None
         
         self.current_job: Optional[Job] = None
         self.running = False
         
+        # 本地 Node 信息 (用于 Cluster 分配)
+        self._node: Optional[Dict] = None
+        self._current_cluster_id: Optional[str] = None
+        
         # 心跳
         self._heartbeat_thread: Optional[threading.Thread] = None
         self._stop_heartbeat = threading.Event()
+        
+        # GPU 监控
+        self._gpu_monitor = None
+        self._init_gpu_monitor()
         
         # 回调
         self.on_job_received: Optional[Callable[[Job], None]] = None
         self.on_status_change: Optional[Callable[[NodeStatus], None]] = None
         self.on_error: Optional[Callable[[str, Exception], None]] = None
+    
+    # ===== Cluster 分配 =====
+    
+    def _init_node_info(self) -> Dict:
+        """初始化本地 Node 信息 (用于 Cluster 分配)"""
+        from src.services.cluster_builder import build_cluster_id
+        
+        # 构建初始 Node 信息
+        self._node = {
+            "node_id": self.node_id,
+            "user_id": self.config.user_id,
+            "region": "unknown",  # TODO: 从 system_info 获取
+            "stake_tier": "personal",  # 用户可配置
+            "loaded_models": [self.config.ollama_model],
+            "quality_score": 0.9,
+            "success_rate": 0.95,
+        }
+        
+        # 生成初始 Cluster ID
+        self._current_cluster_id = build_cluster_id(
+            region=self._node["region"],
+            stake_tier=self._node["stake_tier"],
+            models=self._node["loaded_models"],
+            quality_score=self._node["quality_score"],
+            success_rate=self._node["success_rate"],
+        )
+        
+        return self._node
+    
+    def _check_and_update_cluster(self) -> Optional[str]:
+        """
+        检查并更新 Cluster ID
+        
+        在 Node Capacity Report 时调用
+        如果 loaded_models 变化则更新
+        
+        Returns:
+            新的 cluster_id 或 None
+        """
+        from src.services.cluster_builder import build_cluster_id
+        
+        if self._node is None:
+            self._init_node_info()
+        
+        # 获取最新的 loaded_models
+        loaded_models = self._get_loaded_models()
+        self._node["loaded_models"] = loaded_models
+        
+        # 重新生成 Cluster ID
+        new_cluster_id = build_cluster_id(
+            region=self._node["region"],
+            stake_tier=self._node["stake_tier"],
+            models=loaded_models,
+            quality_score=self._node["quality_score"],
+            success_rate=self._node["success_rate"],
+        )
+        
+        if new_cluster_id != self._current_cluster_id:
+            old_cluster_id = self._current_cluster_id
+            self._current_cluster_id = new_cluster_id
+            logger.info(f"Cluster updated: {old_cluster_id} -> {new_cluster_id}")
+            return new_cluster_id
+        
+        return None
+    
+    def get_current_cluster_id(self) -> Optional[str]:
+        """获取当前 Cluster ID"""
+        if self._current_cluster_id is None:
+            self._init_node_info()
+        return self._current_cluster_id
     
     # ===== 连接管理 =====
     
@@ -307,44 +466,254 @@ class NodeAgent:
         if self.ws:
             self.ws.send(json.dumps(data))
     
-    # ===== 心跳 =====
+    # ===== Status Report (DCM v3.2) =====
     
-    def _start_heartbeat(self):
-        """启动心跳"""
+    def _start_status_reporting(self):
+        """启动状态报告"""
         self._stop_heartbeat.clear()
-        self._heartbeat_thread = threading.Thread(
-            target=self._heartbeat_loop,
+        self._report_thread = threading.Thread(
+            target=self._status_report_loop,
             daemon=True,
         )
-        self._heartbeat_thread.start()
+        self._report_thread.start()
     
-    def _heartbeat_loop(self):
-        """心跳循环"""
+    def _status_report_loop(self):
+        """状态报告循环 (DCM v3.2)
+        
+        发送两种报告:
+        1. Node Capacity Report (低频/稳态) - 30-60秒
+        2. Node Live Status Report (高频/调度) - 2-5秒
+        """
+        import time
+        last_capacity_report = 0
+        
         while not self._stop_heartbeat.is_set():
             try:
-                if self.config.use_websocket:
-                    self._send_ws_message({
-                        "type": "heartbeat",
-                        "node_id": self.node_id,
-                        "status": "processing" if self.current_job else "idle",
-                        "current_job_id": self.current_job.job_id if self.current_job else None,
-                        "timestamp": int(time.time() * 1000),
-                    })
-                else:
-                    # HTTP Polling 模式的心跳
-                    requests.post(
-                        f"{self.config.router_url}/api/v1/nodes/{self.node_id}/heartbeat",
-                        json={
-                            "status": "processing" if self.current_job else "idle",
-                            "current_job_id": self.current_job.job_id if self.current_job else None,
-                        },
-                        timeout=5,
-                    )
+                timestamp = int(time.time() * 1000)
                 
-                self._stop_heartbeat.wait(self.config.heartbeat_interval)
+                # ===== Node Live Status Report (高频/调度) =====
+                self._send_live_status_report(timestamp)
+                
+                # ===== Node Capacity Report (低频/稳态) =====
+                if timestamp - last_capacity_report >= self.config.capacity_report_interval * 1000:
+                    self._send_capacity_report(timestamp)
+                    last_capacity_report = timestamp
+                
+                self._stop_heartbeat.wait(self.config.live_status_interval)
                 
             except Exception as e:
-                logger.error(f"Heartbeat failed: {e}")
+                logger.error(f"Status report failed: {e}")
+    
+    def _send_live_status_report(self, timestamp: int):
+        """发送 Node Live Status Report (高频/调度)
+        
+        频率: 2-5 秒
+        """
+        vram_used = self._get_vram_usage()
+        vram_total = self._get_vram_total()
+        
+        report = {
+            "type": "node_live_status",
+            "node_id": self.node_id,
+            "timestamp": timestamp,
+            "status": {
+                "vram_used_gb": vram_used,
+                "vram_total_gb": vram_total,
+            },
+            "capacity": {
+                "max_concurrency_available": self._calculate_available_concurrency(),
+            },
+            "load": {
+                "active_jobs": len([j for j in [self.current_job] if j]),
+                "available_token_capacity": self._calculate_available_token_capacity(),
+            },
+        }
+        
+        if self.config.use_websocket:
+            self._send_ws_message(report)
+        else:
+            requests.post(
+                f"{self.config.router_url}/api/v1/nodes/{self.node_id}/live_status",
+                json=report,
+                timeout=5,
+            )
+    
+    def _send_capacity_report(self, timestamp: int):
+        """发送 Node Capacity Report (低频/稳态)
+        
+        频率: 30-60 秒
+        
+        同时检查 Cluster ID 是否需要更新
+        """
+        loaded_models = self._get_loaded_models()
+        
+        report = {
+            "type": "node_capacity_report",
+            "node_id": self.node_id,
+            "timestamp": timestamp,
+            "capacity": {
+                "workers_total": self._get_workers_total(),
+                "workers_active": self._get_workers_active(),
+                "max_concurrency_total": self._get_max_concurrency_total(),
+            },
+            "runtime": {
+                "type": self.config.ollama_model.split(":")[0] if ":" in self.config.ollama_model else "ollama",
+                "loaded_models": loaded_models,
+            },
+            "performance": {
+                "max_token_throughput": self._estimate_token_throughput(),
+            },
+        }
+        
+        if self.config.use_websocket:
+            self._send_ws_message(report)
+        else:
+            requests.post(
+                f"{self.config.router_url}/api/v1/nodes/{self.node_id}/capacity_report",
+                json=report,
+                timeout=5,
+            )
+        
+        # 检查并更新 Cluster ID
+        self._check_and_update_cluster()
+    
+    # ===== GPU 监控 =====
+    
+    def _init_gpu_monitor(self):
+        """初始化 GPU 监控器"""
+        from ..utils.gpu_monitor import GPUMonitor
+        self._gpu_monitor = GPUMonitor()
+    
+    def _get_vram_usage(self) -> float:
+        """获取 VRAM 使用量 (GB)
+        
+        使用 GPU 监控模块获取真实数据
+        """
+        if hasattr(self, '_gpu_monitor'):
+            info = self._gpu_monitor.get_gpu_info(0)
+            if info:
+                return info.vram_used_gb
+        return 0.0
+    
+    def _get_vram_total(self) -> float:
+        """获取 VRAM 总容量 (GB)
+        
+        使用 GPU 监控模块获取真实数据
+        """
+        if hasattr(self, '_gpu_monitor'):
+            info = self._gpu_monitor.get_gpu_info(0)
+            if info:
+                return info.vram_total_gb
+        return 0.0
+    
+    def _calculate_available_concurrency(self) -> int:
+        """计算可用并发数
+        
+        基于 GPU VRAM 和 Worker 配置计算
+        """
+        # 估算单个 Job 需要的 VRAM
+        # 假设每个模型占用约 8GB VRAM
+        vram_per_job_gb = 8.0
+        
+        # 获取可用 VRAM
+        available_vram_gb = self._get_vram_total() - self._get_vram_usage()
+        
+        # 基于 VRAM 计算最大并发
+        vram_based_concurrency = int(available_vram_gb / vram_per_job_gb)
+        
+        # 取配置的并发和 VRAM 计算的并发的较小值
+        return min(self.config.max_concurrent_jobs, max(1, vram_based_concurrency))
+    
+    def _calculate_available_token_capacity(self) -> int:
+        """计算可用 token 容量
+        
+        基于可用 VRAM 和模型估算
+        """
+        # 获取 GPU 信息
+        vram_total = self._get_vram_total()
+        vram_used = self._get_vram_usage()
+        vram_available = vram_total - vram_used
+        
+        if vram_available <= 0:
+            return 0
+        
+        # 估算: 每 GB VRAM ≈ 1500 tokens 上下文容量
+        # 这是一个简化估算，实际取决于模型大小
+        tokens_per_gb = 1500
+        
+        # 考虑当前活跃 Job
+        active_jobs = len([j for j in [self.current_job] if j])
+        reserved_tokens = active_jobs * 500  # 每个活跃 Job 预留 500 tokens
+        
+        available_tokens = int(vram_available * tokens_per_gb) - reserved_tokens
+        
+        return max(0, available_tokens)
+    
+    def _get_workers_total(self) -> int:
+        """获取 Worker 总数
+        
+        基于 GPU 数量和并发配置
+        """
+        if hasattr(self, '_gpu_monitor'):
+            gpu_count = self._gpu_monitor.get_gpu_count()
+            if gpu_count > 0:
+                return gpu_count
+        return 1
+    
+    def _get_workers_active(self) -> int:
+        """获取活跃 Worker 数"""
+        return 1 if self.current_job else 0
+    
+    def _get_max_concurrency_total(self) -> int:
+        """获取总最大并发数
+        
+        基于 GPU VRAM 计算
+        """
+        vram_total = self._get_vram_total()
+        if vram_total <= 0:
+            return self.config.max_concurrent_jobs
+        
+        # 估算: 每个 Job 约 8GB VRAM
+        vram_per_job = 8.0
+        return min(self.config.max_concurrent_jobs, int(vram_total / vram_per_job))
+    
+    def _get_loaded_models(self) -> List[str]:
+        """获取已加载模型列表"""
+        # 尝试从 Ollama 获取实际加载的模型
+        try:
+            response = requests.get(f"{self.config.ollama_url}/api/tags", timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                models = [m.get("name", "") for m in data.get("models", [])]
+                if models:
+                    return models
+        except Exception:
+            pass
+        
+        # 回退到配置中的模型
+        return [self.config.ollama_model]
+    
+    def _estimate_token_throughput(self) -> int:
+        """估算 token 吞吐量 (tokens/秒)
+        
+        基于 GPU 性能估算
+        """
+        # 获取 GPU 利用率
+        if hasattr(self, '_gpu_monitor'):
+            utilization = self._gpu_monitor.get_average_utilization()
+            
+            # 估算基准吞吐量 (RTX 4090 约 100 tokens/s)
+            base_throughput = 100
+            
+            # 根据利用率调整
+            if utilization < 50:
+                return int(base_throughput * 0.5)
+            elif utilization < 80:
+                return int(base_throughput * 0.8)
+            else:
+                return base_throughput
+        
+        return 50  # 默认估算
     
     # ===== Job 处理 =====
     
@@ -366,25 +735,67 @@ class NodeAgent:
         thread.start()
     
     def _execute_job(self, job: Job):
-        """执行 Job"""
+        """
+        执行 Job (DCM v3.2 使用 Runtime Protocol)
+        
+        两种模式:
+        1. 旧模式: 使用 self.ollama (兼容)
+        2. 新模式: 使用 self.runtime (Runtime Protocol)
+        """
+        from ..models.runtime_protocol import (
+            RuntimeRequest, RuntimeResponse, Message,
+            GenerationParams, RuntimeLimits, RuntimeStatus
+        )
+        
         start_time = time.time()
         
         try:
-            # 1. 解码输入（base64 → UTF-8）
-            # MVP 简化：假设输入是明文
-            input_text = job.input_text or f"Input tokens: {job.input_tokens}"
+            # 1. 构建 RuntimeRequest
+            execution_id = f"exe_{job.job_id}"
             
-            # 2. 调用 Ollama
-            result = self.ollama.generate(
-                prompt=input_text,
+            # 构建 messages
+            if job.input_text:
+                # 使用提供的 input_text
+                messages = [Message(role="user", content=job.input_text)]
+            else:
+                # 简化: 使用 token 数构造提示
+                messages = [Message(role="user", content=f"Process {job.input_tokens} input tokens")]
+            
+            # 构建 generation params
+            generation = GenerationParams(
+                temperature=0.7,
                 max_tokens=job.output_tokens_limit,
-                timeout=job.max_latency // 1000 + 10,  # 延迟限制 + buffer
+                stream=False,
             )
             
-            # 3. 提取结果
-            output_text = result.get("response", "")
-            actual_latency_ms = int(result.get("total_duration", 0) / 1_000_000)
-            actual_output_tokens = result.get("eval_count", self._estimate_tokens(output_text))
+            # 构建 limits
+            limits = RuntimeLimits(
+                input_tokens=job.input_tokens,
+                output_tokens_limit=job.output_tokens_limit,
+                max_latency_ms=job.max_latency,
+            )
+            
+            # 创建请求
+            request = RuntimeRequest(
+                execution_id=execution_id,
+                job_id=job.job_id,
+                model=job.model or self.config.ollama_model,
+                messages=messages,
+                generation=generation,
+                limits=limits,
+                metadata={"node_id": self.node_id},
+            )
+            
+            # 2. 使用 Runtime Protocol 执行
+            response = self.runtime.execute(request)
+            
+            # 3. 处理结果
+            if response.success:
+                output_text = response.output
+                actual_latency_ms = response.latency_ms
+                actual_output_tokens = response.usage.output_tokens
+            else:
+                raise Exception(response.error or "Runtime execution failed")
             
             # 4. 计算哈希
             result_hash = hashlib.sha256(output_text.encode()).hexdigest()

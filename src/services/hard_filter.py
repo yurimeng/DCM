@@ -1,108 +1,112 @@
 """
-Hard Filter - F3.3: 硬过滤条件 + 模型兼容性
-来源: Function/F3-Match-Engine-2.0 Section F3.3
-
-硬过滤条件:
-1. 模型兼容性检查 (新增)
-2. Slot 状态必须是 FREE
-3. 容量检查: current_load < max_concurrency
-4. 价格检查: slot.price <= job.max_price
-5. 延迟检查: slot.latency <= job.max_latency
-6. 区域检查（可选）: slot.region == job.region
+Hard Filter - DCM v3.2
+Based on Node Live Status Report
 """
 
-from typing import Optional
-from ..models.slot import Slot, SlotStatus
-from ..models.job import Job, JobStatus
-from .compatibility import CompatibilityMatrix, compatibility_matrix
+from typing import Optional, List, Tuple
+from ..models.node import Node
+from ..models.job import Job
+from .node_status_store import node_status_store, NodeStatusStore
 
 
 class HardFilter:
-    """
-    硬过滤器 - 必须满足所有条件才能进入评分阶段
-    
-    过滤条件:
-    1. 模型兼容性检查
-    2. Slot 状态必须是 FREE
-    3. 容量检查: current_load < max_concurrency
-    4. 价格检查: slot.price <= job.max_price
-    5. 延迟检查: slot.latency <= job.max_latency
-    6. 区域检查（可选）: slot.region == job.region
-    """
-    
-    def __init__(
-        self,
-        check_region: bool = False,
-        compatibility: Optional[CompatibilityMatrix] = None,
-    ):
-        self.check_region = check_region
-        self.compatibility = compatibility or compatibility_matrix
-    
-    def filter(self, slot: Slot, job: Job) -> tuple[bool, Optional[str]]:
-        """
-        执行硬过滤
-        
-        Args:
-            slot: 待检查的 Slot
-            job: 待检查的 Job
-            
-        Returns:
-            (通过, 失败原因)
-        """
-        # 1. 模型兼容性检查
-        job_model = job.model_requirement
-        slot_model = slot.model.name
-        compat_score = self.compatibility.get_compatibility(job_model, slot_model)
-        if compat_score <= 0:
-            return False, "model_incompatible"
-        
-        # 2. Slot 状态检查 (DCM v3.1: 允许 FREE, PRE_LOCKED, PARTIALLY_RESERVED)
-        if slot.status not in [SlotStatus.FREE, SlotStatus.PRE_LOCKED, SlotStatus.PARTIALLY_RESERVED]:
-            return False, "slot_not_available"
-        
-        # 3. 容量检查 (DCM v3.1: 使用 available_capacity)
-        if slot.capacity.available_capacity <= 0:
-            return False, "slot_at_capacity"
-        
-        # 4. 价格检查 - 输入价格
-        if hasattr(job, 'max_input_price') and job.max_input_price:
-            if slot.pricing.input_price > job.max_input_price:
-                return False, "input_price_too_high"
-        
-        # 5. 价格检查 - 输出价格
-        if slot.pricing.output_price > job.bid_price:
-            return False, "output_price_too_high"
-        
-        # 6. 延迟检查
-        if slot.performance.avg_latency_ms > job.max_latency:
-            return False, "latency_too_high"
-        
-        # 7. 区域检查（可选）
-        if self.check_region and job.region:
-            if slot.region and slot.region != job.region:
-                return False, "region_mismatch"
-        
+    """Hard Filter - DCM v3.2"""
+
+    def __init__(self, status_store: Optional[NodeStatusStore] = None):
+        self.status_store = status_store or node_status_store
+
+    def filter(self, cluster_or_node, job: Job) -> Tuple[bool, Optional[str]]:
+        """Filter single Cluster/Node (compatible interface)"""
+        from ..models.cluster import Cluster
+
+        if isinstance(cluster_or_node, Node):
+            return self.filter_node(cluster_or_node, job)
+        elif isinstance(cluster_or_node, Cluster):
+            return self._filter_cluster(cluster_or_node, job)
+
+        return False, "unsupported_type"
+
+    def filter_node(self, node: Node, job: Job) -> Tuple[bool, Optional[str]]:
+        """Filter single Node"""
+        live_status = self.status_store.get_node_status(node.node_id)
+        available_concurrency = live_status["available_concurrency"]
+        available_queue_tokens = live_status["available_queue_tokens"]
+
+        job_tokens = job.input_tokens + job.output_tokens_limit
+
+        if available_concurrency <= 0:
+            return False, "no_available_concurrency"
+        if available_queue_tokens < job_tokens:
+            return False, "insufficient_queue_tokens"
+        if node.pricing.ask_price_usdc_per_mtoken > job.bid_price:
+            return False, "price_too_high"
+
+        if job.model_requirement:
+            model_found = any(
+                job.model_requirement.lower() in model.lower()
+                for model in node.runtime.loaded_models
+            )
+            if not model_found:
+                job_family = job.model_requirement.split(":")[0].lower()
+                family_found = any(
+                    job_family in model.lower()
+                    for model in node.runtime.loaded_models
+                )
+                if not family_found:
+                    return False, "model_not_supported"
+
         return True, None
-    
-    def filter_many(self, slots: list[Slot], job: Job) -> list[Slot]:
-        """
-        批量过滤 Slots
-        
-        Args:
-            slots: 待过滤的 Slots 列表
-            job: 目标 Job
-            
-        Returns:
-            通过过滤的 Slots 列表
-        """
+
+    def _filter_cluster(self, cluster, job: Job) -> Tuple[bool, Optional[str]]:
+        """Filter Cluster (simplified)"""
+        live_status = self.status_store.get_node_status(cluster.cluster_id)
+        available_concurrency = live_status["available_concurrency"]
+        available_queue_tokens = live_status["available_queue_tokens"]
+
+        job_tokens = job.input_tokens + job.output_tokens_limit
+
+        if available_concurrency <= 0:
+            return False, "no_available_concurrency"
+        if available_queue_tokens < job_tokens:
+            return False, "insufficient_queue_tokens"
+        if cluster.pricing.output_price > job.bid_price:
+            return False, "output_price_too_high"
+        if cluster.performance.avg_latency_ms > job.max_latency:
+            return False, "latency_too_high"
+
+        # Model compatibility check
+        if job.model_requirement:
+            cluster_model = cluster.model.name
+            if job.model_requirement.lower() not in cluster_model.lower():
+                job_family = job.model_requirement.split(":")[0].lower()
+                cluster_family = cluster.model.family.lower()
+                if job_family != cluster_family:
+                    return False, "model_not_supported"
+
+        return True, None
+
+    def filter_many(self, clusters_or_nodes, job: Job) -> list:
+        """Batch filter (compatible interface)"""
         result = []
-        for slot in slots:
-            passed, _ = self.filter(slot, job)
+        for item in clusters_or_nodes:
+            passed, _ = self.filter(item, job)
             if passed:
-                result.append(slot)
+                result.append(item)
         return result
+
+    def filter_many_nodes(self, nodes: List[Node], job: Job) -> List[Tuple[Node, Optional[str]]]:
+        """Batch filter Nodes"""
+        result = []
+        for node in nodes:
+            passed, reason = self.filter_node(node, job)
+            result.append((node, reason))
+        return result
+
+    def get_passing_nodes(self, nodes: List[Node], job: Job) -> List[Node]:
+        """Get passing Nodes"""
+        return [node for node, reason in self.filter_many_nodes(nodes, job) if reason is None]
 
 
 def create_default_filter() -> HardFilter:
-    """创建默认配置的过滤器"""
-    return HardFilter(check_region=False)
+    """Create default filter"""
+    return HardFilter()

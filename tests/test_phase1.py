@@ -11,7 +11,7 @@ from src.models import (
     Slot, SlotStatus, LockType, JobSet,
     Match, MatchCreate,
 )
-from src.models.slot import ModelInfo, PricingInfo, PerformanceInfo, CapacityInfo
+from src.models.cluster import ModelInfo, PricingInfo, PerformanceInfo, CapacityInfo
 from src.services.compatibility import CompatibilityMatrix, CompatibilityLevel
 
 
@@ -99,7 +99,7 @@ class TestSlotModel:
     def test_slot_creation(self):
         """创建 Slot"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             model=ModelInfo(family="qwen", name="qwen3-8b"),
@@ -107,14 +107,14 @@ class TestSlotModel:
             performance=PerformanceInfo(avg_latency_ms=100),
         )
         
-        assert slot.slot_id == "slot_001"
+        assert slot.cluster_id == "slot_001"
         assert slot.model.name == "qwen3-8b"
         assert slot.status == SlotStatus.FREE
     
     def test_slot_multi_job_capacity(self):
         """Slot 多 Job 容量"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -130,7 +130,7 @@ class TestSlotModel:
     def test_slot_pre_lock(self):
         """Slot Pre-Lock"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -154,7 +154,7 @@ class TestSlotModel:
     def test_slot_multi_pre_lock(self):
         """Slot 多 Pre-Lock"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -182,7 +182,7 @@ class TestSlotModel:
     def test_slot_lock_release(self):
         """Slot Lock 释放"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -208,7 +208,7 @@ class TestSlotModel:
     def test_slot_status_update(self):
         """Slot 状态自动更新"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -233,7 +233,7 @@ class TestMatchModel:
         """创建 Match"""
         match = Match(
             job_id="job_001",
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             locked_price=0.5,
@@ -241,7 +241,7 @@ class TestMatchModel:
         )
         
         assert match.job_id == "job_001"
-        assert match.slot_id == "slot_001"
+        assert match.cluster_id == "slot_001"
         assert match.node_id == "node_001"
         assert match.worker_id == "worker_001"
         assert match.model == "qwen3-8b"

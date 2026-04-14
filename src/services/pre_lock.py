@@ -9,14 +9,14 @@ Pre-Lock = 短期资源预占机制
 4. 转换到 Reserved 状态
 """
 
-from typing import Optional, Dict, Callable
+from typing import Optional, Dict, Callable, List
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from enum import Enum
 import logging
 import time
 
-from ..models.slot import Slot, SlotStatus, SlotLock, LockType
+from ..models.cluster import Cluster, ClusterStatus, ClusterLock, LockType
 
 logger = logging.getLogger(__name__)
 
@@ -107,13 +107,14 @@ class PreLockService:
         self._on_lock_expired = on_expired
         self._on_lock_rejected = on_rejected
     
-    def request_pre_lock(self, job_id: str, slot: Slot, ttl_ms: Optional[int] = None) -> PreLockResult:
+    def request_pre_lock(self, job_id: str, cluster: Cluster, ttl_ms: Optional[int] = None, tokens: int = 0) -> PreLockResult:
         """请求 Pre-Lock
         
         Args:
             job_id: Job ID
-            slot: Slot 实例
+            cluster: Cluster 实例
             ttl_ms: TTL 毫秒（可选）
+            tokens: 需要的 token 数量 (DCM v3.2)
             
         Returns:
             PreLockResult
@@ -121,55 +122,55 @@ class PreLockService:
         ttl = ttl_ms or self.default_ttl_ms
         
         # 检查 Slot 是否可锁定
-        if not slot.is_available():
+        if not cluster.is_available():
             return PreLockResult(
                 success=False,
                 job_id=job_id,
-                slot_id=slot.slot_id,
+                slot_id=cluster.slot_id,
                 status=PreLockStatus.REJECTED,
-                reason="slot_not_available",
+                reason="cluster_not_available",
             )
         
         # 检查容量
-        if slot.capacity.available_capacity <= 0:
+        if cluster.capacity.available_capacity <= 0:
             return PreLockResult(
                 success=False,
                 job_id=job_id,
-                slot_id=slot.slot_id,
+                slot_id=cluster.slot_id,
                 status=PreLockStatus.REJECTED,
                 reason="capacity_full",
             )
         
-        # 尝试创建 Pre-Lock
-        if not slot.pre_lock(job_id, ttl):
+        # 尝试创建 Pre-Lock（包含 token 预留）
+        if not cluster.pre_lock(job_id, ttl, tokens):
             return PreLockResult(
                 success=False,
                 job_id=job_id,
-                slot_id=slot.slot_id,
+                slot_id=cluster.slot_id,
                 status=PreLockStatus.REJECTED,
                 reason="pre_lock_failed",
             )
         
         # 记录请求
-        request = PreLockRequest(job_id=job_id, slot_id=slot.slot_id, ttl_ms=ttl)
+        request = PreLockRequest(job_id=job_id, slot_id=cluster.slot_id, ttl_ms=ttl)
         self._pending_requests[job_id] = request
         
-        logger.info(f"Pre-Lock requested: job={job_id}, slot={slot.slot_id}, ttl={ttl}ms")
+        logger.info(f"Pre-Lock requested: job={job_id}, slot={cluster.slot_id}, ttl={ttl}ms, tokens={tokens}")
         
         return PreLockResult(
             success=True,
             job_id=job_id,
-            slot_id=slot.slot_id,
+            slot_id=cluster.slot_id,
             status=PreLockStatus.PENDING,
             expires_at=request.expires_at,
         )
     
-    def receive_ack(self, job_id: str, slot: Slot) -> PreLockResult:
+    def receive_ack(self, job_id: str, cluster: Cluster) -> PreLockResult:
         """接收 Pre-Lock Ack
         
         Args:
             job_id: Job ID
-            slot: Slot 实例
+            cluster: Cluster 实例
             
         Returns:
             PreLockResult
@@ -178,17 +179,17 @@ class PreLockService:
         if not request:
             logger.warning(f"Pre-Lock ack received but no pending request: job={job_id}")
             # 仍然尝试确认
-            if slot.confirm_pre_lock(job_id):
+            if cluster.confirm_pre_lock(job_id):
                 return PreLockResult(
                     success=True,
                     job_id=job_id,
-                    slot_id=slot.slot_id,
+                    slot_id=cluster.slot_id,
                     status=PreLockStatus.CONVERTED,
                 )
             return PreLockResult(
                 success=False,
                 job_id=job_id,
-                slot_id=slot.slot_id,
+                slot_id=cluster.slot_id,
                 status=PreLockStatus.REJECTED,
                 reason="no_pending_request",
             )
@@ -196,28 +197,28 @@ class PreLockService:
         # 检查是否过期
         if request.is_expired():
             self._pending_requests.pop(job_id, None)
-            slot.release_lock(job_id)
+            cluster.release_lock(job_id)
             return PreLockResult(
                 success=False,
                 job_id=job_id,
-                slot_id=slot.slot_id,
+                slot_id=cluster.slot_id,
                 status=PreLockStatus.EXPIRED,
                 reason="pre_lock_expired",
             )
         
         # 确认 Pre-Lock
-        if slot.confirm_pre_lock(job_id):
+        if cluster.confirm_pre_lock(job_id):
             self._pending_requests.pop(job_id, None)
             
             if self._on_lock_confirmed:
-                self._on_lock_confirmed(job_id, slot.slot_id)
+                self._on_lock_confirmed(job_id, cluster.slot_id)
             
-            logger.info(f"Pre-Lock confirmed: job={job_id}, slot={slot.slot_id}")
+            logger.info(f"Pre-Lock confirmed: job={job_id}, slot={cluster.slot_id}")
             
             return PreLockResult(
                 success=True,
                 job_id=job_id,
-                slot_id=slot.slot_id,
+                slot_id=cluster.slot_id,
                 status=PreLockStatus.LOCKED,
                 expires_at=request.expires_at,
             )
@@ -225,44 +226,44 @@ class PreLockService:
         return PreLockResult(
             success=False,
             job_id=job_id,
-            slot_id=slot.slot_id,
+            slot_id=cluster.slot_id,
             status=PreLockStatus.REJECTED,
             reason="confirm_failed",
         )
     
-    def receive_reject(self, job_id: str, slot: Slot, reason: str) -> PreLockResult:
+    def receive_reject(self, job_id: str, cluster: Cluster, reason: str) -> PreLockResult:
         """接收 Pre-Lock Reject
         
         Args:
             job_id: Job ID
-            slot: Slot 实例
+            cluster: Cluster 实例
             reason: 拒绝原因
             
         Returns:
             PreLockResult
         """
         self._pending_requests.pop(job_id, None)
-        slot.release_lock(job_id)
+        cluster.release_lock(job_id)
         
         if self._on_lock_rejected:
-            self._on_lock_rejected(job_id, slot.slot_id, reason)
+            self._on_lock_rejected(job_id, cluster.slot_id, reason)
         
-        logger.info(f"Pre-Lock rejected: job={job_id}, slot={slot.slot_id}, reason={reason}")
+        logger.info(f"Pre-Lock rejected: job={job_id}, slot={cluster.slot_id}, reason={reason}")
         
         return PreLockResult(
             success=False,
             job_id=job_id,
-            slot_id=slot.slot_id,
+            slot_id=cluster.slot_id,
             status=PreLockStatus.REJECTED,
             reason=reason,
         )
     
-    def check_expired(self, job_id: str, slot: Slot) -> PreLockResult:
+    def check_expired(self, job_id: str, cluster: Cluster) -> PreLockResult:
         """检查并处理过期
         
         Args:
             job_id: Job ID
-            slot: Slot 实例
+            cluster: Cluster 实例
             
         Returns:
             PreLockResult
@@ -272,7 +273,7 @@ class PreLockService:
             return PreLockResult(
                 success=False,
                 job_id=job_id,
-                slot_id=slot.slot_id,
+                slot_id=cluster.slot_id,
                 status=PreLockStatus.EXPIRED,
                 reason="no_pending_request",
             )
@@ -281,43 +282,43 @@ class PreLockService:
             return PreLockResult(
                 success=True,
                 job_id=job_id,
-                slot_id=slot.slot_id,
+                slot_id=cluster.slot_id,
                 status=PreLockStatus.PENDING,
                 expires_at=request.expires_at,
             )
         
         # 过期处理
         self._pending_requests.pop(job_id, None)
-        slot.release_lock(job_id)
+        cluster.release_lock(job_id)
         
         if self._on_lock_expired:
-            self._on_lock_expired(job_id, slot.slot_id)
+            self._on_lock_expired(job_id, cluster.slot_id)
         
-        logger.info(f"Pre-Lock expired: job={job_id}, slot={slot.slot_id}")
+        logger.info(f"Pre-Lock expired: job={job_id}, slot={cluster.slot_id}")
         
         return PreLockResult(
             success=False,
             job_id=job_id,
-            slot_id=slot.slot_id,
+            slot_id=cluster.slot_id,
             status=PreLockStatus.EXPIRED,
             reason="ttl_expired",
         )
     
-    def cleanup_slot_expired(self, slot: Slot) -> list[str]:
+    def cleanup_slot_expired(self, cluster: Cluster) -> list[str]:
         """清理 Slot 上所有过期的 Pre-Locks
         
         Args:
-            slot: Slot 实例
+            cluster: Cluster 实例
             
         Returns:
             被清理的 Job IDs
         """
-        expired_jobs = slot.cleanup_expired_locks()
+        expired_jobs = cluster.cleanup_expired_locks()
         
         for job_id in expired_jobs:
             self._pending_requests.pop(job_id, None)
             if self._on_lock_expired:
-                self._on_lock_expired(job_id, slot.slot_id)
+                self._on_lock_expired(job_id, cluster.slot_id)
         
         return expired_jobs
     
@@ -328,6 +329,47 @@ class PreLockService:
     def has_pending(self, job_id: str) -> bool:
         """检查是否有待处理的 Pre-Lock"""
         return job_id in self._pending_requests
+    
+    def check_and_cleanup_expired(self, cluster: Cluster) -> List[str]:
+        """检查并清理过期的 Pre-Locks (DCM v3.2)
+        
+        定期调用以清理过期的 Pre-Locks 并释放队列容量
+        
+        Args:
+            cluster: Cluster 实例
+            
+        Returns:
+            被清理的 Job IDs
+        """
+        expired_jobs = []
+        
+        # 检查待处理请求中的过期项
+        for job_id, request in list(self._pending_requests.items()):
+            if request.is_expired():
+                # 调用 slot 的清理方法（会释放队列容量）
+                if cluster.cleanup_expired_pre_lock(job_id):
+                    expired_jobs.append(job_id)
+                    self._pending_requests.pop(job_id, None)
+                    if self._on_lock_expired:
+                        self._on_lock_expired(job_id, cluster.slot_id)
+                    logger.info(f"Pre-Lock expired and cleaned: job={job_id}, slot={cluster.slot_id}")
+        
+        return expired_jobs
+    
+    def process_expired_requests(self, clusters: Dict[str, Cluster]) -> int:
+        """处理所有 Slots 上过期的 Pre-Lock 请求 (DCM v3.2)
+        
+        Args:
+            slots: slot_id -> Slot 的映射
+            
+        Returns:
+            清理的过期请求数量
+        """
+        total_expired = 0
+        for slot_id, slot in slots.items():
+            expired = self.check_and_cleanup_expired(cluster)
+            total_expired += len(expired)
+        return total_expired
 
 
 # 全局实例

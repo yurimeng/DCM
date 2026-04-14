@@ -1,5 +1,5 @@
 """
-Match Model - DCM v3.0
+Match Model - DCM v3.2
 Match = 匹配结果 + 执行链路
 """
 
@@ -12,7 +12,7 @@ import uuid
 class MatchCreate(BaseModel):
     """Match 创建参数"""
     job_id: str
-    slot_id: str
+    cluster_id: str
     node_id: str
     worker_id: str
     locked_price: float
@@ -22,13 +22,13 @@ class Match(BaseModel):
     """Match 完整模型
     
     Match 包含完整的执行链路信息：
-    Job → Slot → Node → Worker → Runtime → Model
+    Job → Cluster → Node → Worker → Runtime → Model
     """
     match_id: str = Field(default_factory=lambda: f"match_{uuid.uuid4().hex[:8]}")
     
     # 核心关联
     job_id: str = Field(..., description="Job ID")
-    slot_id: str = Field(default_factory=lambda: f"slot_{uuid.uuid4().hex[:8]}", description="Slot ID")
+    cluster_id: str = Field(default_factory=lambda: f"cluster_{uuid.uuid4().hex[:8]}", description="Cluster ID")
     node_id: str = Field(..., description="Node ID")
     worker_id: str = Field(default_factory=lambda: f"worker_{uuid.uuid4().hex[:8]}", description="Worker ID")
     
@@ -55,13 +55,24 @@ class Match(BaseModel):
     # 失败重试
     retry_count: int = 0
     original_match_id: Optional[str] = None
+    
+    # ==================== 别名兼容 ====================
+    @property
+    def slot_id(self) -> str:
+        """兼容属性: cluster_id"""
+        return self.cluster_id
+    
+    @slot_id.setter
+    def slot_id(self, value: str) -> None:
+        """兼容设置: cluster_id"""
+        self.cluster_id = value
 
 
 class MatchResponse(BaseModel):
     """Match API 响应"""
     match_id: str
     job_id: str
-    slot_id: str
+    cluster_id: str
     node_id: str
     worker_id: str
     locked_price: float

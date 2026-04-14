@@ -20,6 +20,7 @@ from ..models.db_models import NodeDB, NodeStatusDB, StakeRecordDB, MatchDB
 from ..repositories import NodeRepository, MatchRepository, JobRepository, EscrowRepository
 from ..services import matching_service, escrow_service, verification_service, stake_service
 from config import settings
+from ..services.settlement_config import settlement_config
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
 
@@ -37,21 +38,60 @@ async def register_node(
     db: Session = Depends(get_db)
 ):
     """
-    注册新节点
+    Register new node (Required: user_id, runtime and model)
+    注册新节点（必填：user_id, runtime 和 model）
     
+    Returns required Stake threshold
     返回所需的 Stake 门槛
     """
-    # 1. 创建 Node Pydantic 模型
+    # Validate user_id / 验证用户 ID
+    user_id = node_create.user_id
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    
+    # Validate user exists and is active / 验证用户存在且有效
+    from ..repositories import UserRepository
+    user_repo = UserRepository(db)
+    is_valid, user_db, error_msg = user_repo.validate_user_id(user_id)
+    
+    if not is_valid:
+        logger.warning(f"User validation failed: {error_msg}")
+        raise HTTPException(status_code=403, detail=error_msg)
+    
+    # 1. Create Node Pydantic model
+    # 创建 Node Pydantic 模型
     node_data = node_create.model_dump()
     
+    # Generate unique node_id
     # 生成唯一的 node_id
     node_data['node_id'] = str(uuid.uuid4())
     
-    # 预留扩展字段 (metadata) - 未来可用于用户绑定、钱包地址等
+    # Set GPU details (from request or defaults)
+    # 设置 GPU 详细信息（从请求或默认值）
+    node_data['gpu_qty'] = node_data.get('gpu_qty') or node_data.get('gpu_count', 1) or 1
+    node_data['gpu_vram_gb'] = node_data.get('gpu_vram_gb') if node_data.get('gpu_vram_gb') is not None else float(node_data.get('vram_gb', 0)) or 0.0
+    node_data['gpu_pooled'] = node_data.get('gpu_pooled') if node_data.get('gpu_pooled') is not None else False
+    
+    # Set default model_support if not provided
+    # 如果未提供 model_support，使用 model 作为默认值
+    if not node_data.get('model_support'):
+        node_data['model_support'] = [node_data.get('model', '')]
+    
+    # System info metadata
+    # 系统信息元数据
     node_data['metadata'] = {
-        'user_id': None,           # 未来绑定用户
-        'wallet_address': None,    # 未来绑定钱包
-        'tags': [],                # 自定义标签
+        # User binding / 用户绑定
+        'user_id': user_id,
+        # GPU Details / GPU 详细信息
+        'gpu_qty': node_data['gpu_qty'],
+        'gpu_vram_gb': node_data['gpu_vram_gb'],
+        'gpu_pooled': node_data['gpu_pooled'],
+        # OS Info / 操作系统信息
+        'os_name': node_data.get('os_name', ''),
+        'os_version': node_data.get('os_version', ''),
+        'hostname': node_data.get('hostname', ''),
+        # Tags / 自定义标签
+        'tags': [],
     }
     
     node = Node(**node_data)
@@ -60,7 +100,10 @@ async def register_node(
     node_repo = NodeRepository(db)
     db_node = node_repo.create(node)
     
-    # 3. 注册到撮合引擎（内存）
+    # 3. 更新用户的 node_ids（系统自动维护）
+    user_repo.add_node_to_user(user_id, node.node_id)
+    
+    # 4. 注册到撮合引擎（内存）
     matching_service.register_node(node)
     
     # 4. 响应
@@ -92,6 +135,7 @@ async def get_node(
         "node_id": db_node.node_id,
         "gpu_type": db_node.gpu_type,
         "vram_gb": db_node.vram_gb,
+        "model": db_node.model,  # 从 Node Agent 配置读取
         "model_support": db_node.model_support,
         "ask_price": db_node.ask_price,
         "avg_latency": db_node.avg_latency,
@@ -132,6 +176,7 @@ async def node_online(
     # 更新数据库
     node_repo.update(node_id, status=NodeStatus.ONLINE)
     
+    # Register node to matching engine (in-memory service)
     # 注册节点到撮合引擎（内存服务）
     from ..models import Node
     import json
@@ -139,6 +184,10 @@ async def node_online(
         node_id=node_id,
         gpu_type=db_node.gpu_type,
         vram_gb=db_node.vram_gb,
+        # Required: runtime and model
+        # 必填：runtime 和 model
+        runtime=db_node.runtime,
+        model=db_node.model,
         model_support=json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else (db_node.model_support or []),
         ask_price=float(db_node.ask_price),
         avg_latency=int(db_node.avg_latency),
@@ -171,6 +220,44 @@ async def node_offline(
         "node_id": node_id,
         "status": NodeStatus.OFFLINE.value,
         "message": "Node is now offline"
+    }
+
+
+@router.delete("/{node_id}")
+async def delete_node(
+    node_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    删除节点（系统自动维护 User.node_ids）
+    Delete node (system auto-maintains User.node_ids)
+    
+    只能由节点所属用户调用
+    """
+    node_repo = NodeRepository(db)
+    user_repo = UserRepository(db)
+    
+    # 获取节点信息
+    node = node_repo.get(node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    # 获取用户 ID
+    user_id = node.metadata.get("user_id") if node.metadata else None
+    
+    # 从用户 node_ids 移除（系统自动维护）
+    if user_id:
+        user_repo.remove_node_from_user(user_id, node_id)
+    
+    # 从撮合引擎移除
+    matching_service.unregister_node(node_id)
+    
+    # 删除节点记录
+    node_repo.delete(node_id)
+    
+    return {
+        "node_id": node_id,
+        "message": "Node deleted successfully"
     }
 
 
@@ -252,7 +339,8 @@ async def poll_job(
             execution_id=f"exec_{match.match_id}",
             job_id=match.job_id,
             slot_id=match.slot_id,
-            model=model_info,
+            model=match.model,  # Model name string
+            model_info=model_info,  # Extended model info
             input=invoke_input,
             generation=generation,
             runtime=runtime,
@@ -317,7 +405,7 @@ async def submit_result(
         result=result_submit.result,
         result_hash=result_submit.result_hash,
         actual_latency_ms=result_submit.actual_latency_ms,
-        actual_output_tokens=result_submit.actual_output_tokens,
+        actual_output_tokens=result_submit.actual_tokens,
     )
     
     # 10% 概率触发 Layer 2
@@ -340,7 +428,7 @@ async def submit_result(
     job_repo.update(job_id, 
         status="completed",
         result=decoded_result,
-        actual_output_tokens=result_submit.actual_output_tokens,
+        actual_output_tokens=result_submit.actual_tokens,
         actual_latency_ms=result_submit.actual_latency_ms,
         completed_at=datetime.utcnow()
     )
@@ -358,8 +446,8 @@ async def submit_result(
             )
             
             # 计算分配
-            platform_fee = actual_cost * 0.05  # 5%
-            node_earn = actual_cost * 0.95   # 95%
+            platform_fee = actual_cost * settlement_config.platform_fee_rate
+            node_earn = actual_cost * settlement_config.node_earn_rate
             refund_amount = db_escrow.locked_amount - actual_cost
             
             # 更新 Escrow
@@ -506,6 +594,7 @@ async def list_nodes(
                 "ask_price": node.ask_price,
                 "status": _safe_status(node.status),
                 "region": node.region,
+                "model": node.model,  # 从 Node Agent 配置读取
             }
             for node in nodes
         ],
@@ -525,27 +614,82 @@ async def node_heartbeat(
     节点心跳（HTTP Polling 模式）
     
     Node Agent 定期发送心跳，报告状态
+    包含用户身份验证
+    
+    DCM v3.2 重要更新:
+    - 心跳中可以包含 runtime 和 model
+    - 用于更新 Node 的运行时信息
+    - Node Agent 启动 Runtime 后会通过心跳更新
     """
+    # Validate user_id from heartbeat / 验证心跳中的用户 ID
+    user_id = heartbeat_data.get("user_id")
+    user_disabled = False
+    
+    if user_id:
+        from ..repositories import UserRepository
+        user_repo = UserRepository(db)
+        is_valid, user_db, error_msg = user_repo.validate_user_id(user_id)
+        
+        if not is_valid:
+            logger.warning(f"User validation failed on heartbeat: {error_msg}")
+            # Return 403 to indicate user is disabled/invalid
+            raise HTTPException(status_code=403, detail=error_msg)
+        
+        # Check if user is disabled
+        if user_db.status == "disabled":
+            user_disabled = True
+            logger.warning(f"User {user_id} is disabled!")
+    
     node_repo = NodeRepository(db)
     db_node = node_repo.get(node_id)
     
     if not db_node:
         raise HTTPException(status_code=404, detail="Node not found")
     
-    # 更新心跳时间
+    # 更新心跳时间 / Update heartbeat time
     node_repo.update_heartbeat(node_id)
+    
+    # ===== 更新 Runtime 和 Model (DCM v3.2) =====
+    # Node Agent 启动 Runtime 后会通过心跳更新这些字段
+    update_fields = {}
+    
+    # runtime 和 model 可以在心跳中更新
+    if heartbeat_data.get("runtime"):
+        update_fields["runtime"] = heartbeat_data["runtime"]
+    
+    if heartbeat_data.get("model"):
+        update_fields["model"] = heartbeat_data["model"]
+    
+    # GPU 信息也可能通过心跳更新
+    if heartbeat_data.get("gpu_type"):
+        update_fields["gpu_type"] = heartbeat_data["gpu_type"]
+    
+    if heartbeat_data.get("vram_gb"):
+        update_fields["vram_gb"] = heartbeat_data["vram_gb"]
+    
+    if update_fields:
+        node_repo.update(node_id, **update_fields)
+        logger.info(f"Node {node_id} updated via heartbeat: {list(update_fields.keys())}")
     
     # 同步到 matching_service 内存状态
     if db_node.status == NodeStatusDB.ONLINE:
+        # 使用心跳中的 runtime/model（如果有）或数据库中的值
+        runtime = heartbeat_data.get("runtime") or db_node.runtime or 'ollama'
+        model = heartbeat_data.get("model") or db_node.model or 'qwen2.5:7b'
+        gpu_type = heartbeat_data.get("gpu_type") or db_node.gpu_type or 'unknown'
+        vram_gb = heartbeat_data.get("vram_gb") or db_node.vram_gb or 0
+        
         from ..models import Node
         node = Node(
             node_id=db_node.node_id,
-            gpu_type=db_node.gpu_type,
-            vram_gb=db_node.vram_gb,
+            gpu_type=gpu_type,
+            vram_gb=vram_gb,
             model_support=json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else (db_node.model_support or []),
             ask_price=float(db_node.ask_price),
             avg_latency=int(db_node.avg_latency),
             region=db_node.region,
+            runtime=runtime,
+            model=model,
         )
         matching_service.register_node(node)
         matching_service.update_node_status(node_id, NodeStatus.ONLINE)
@@ -564,6 +708,9 @@ async def node_heartbeat(
                 ask_price=float(db_node.ask_price),
                 avg_latency=int(db_node.avg_latency),
                 region=db_node.region,
+                # Required fields from NodeDB
+                runtime=db_node.runtime or 'ollama',
+                model=db_node.model or 'qwen2.5:7b',
             )
             try:
                 matching_service.register_node(node)
@@ -600,6 +747,124 @@ async def node_heartbeat(
         "re_register": re_register,
         "pre_lock_jobs": pre_lock_jobs,
         "pre_lock_count": len(pre_lock_jobs),
+        # User authentication status / 用户认证状态
+        "user_disabled": user_disabled,
+        "user_id": user_id,
+    }
+
+
+@router.post("/{node_id}/live_status")
+async def node_live_status(
+    node_id: str,
+    status_data: dict,
+    db: Session = Depends(get_db)
+):
+    """
+    节点实时状态上报 (Node Live Status Report)
+    
+    频率: 2-5 秒
+    用途: 实时调度决策
+    
+    DCM v3.2:
+    - Node Agent 发送实时状态到 Match Engine
+    - Match Engine 使用此数据做调度决策
+    """
+    from ..services.node_status_store import update_node_status
+    
+    # 验证 Node 存在
+    node_repo = NodeRepository(db)
+    db_node = node_repo.get(node_id)
+    
+    if not db_node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    # 更新到 NodeStatusStore
+    update_node_status(node_id, status_data)
+    
+    logger.debug(f"Node {node_id} live status updated: concurrency={status_data.get('capacity', {}).get('max_concurrency_available', 0)}")
+    
+    return {
+        "received": True,
+        "node_id": node_id,
+        "timestamp": status_data.get("timestamp"),
+    }
+
+
+@router.post("/{node_id}/capacity_report")
+async def node_capacity_report(
+    node_id: str,
+    report_data: dict,
+    db: Session = Depends(get_db)
+):
+    """
+    节点容量报告 (Node Capacity Report)
+    
+    频率: 30-60 秒
+    用途: 稳态信息更新
+    
+    DCM v3.2:
+    - 更新 Node 的 runtime、models、capability
+    - 可能触发 Cluster ID 重新计算
+    - 返回新的 cluster_id（如果有变化）
+    """
+    from ..services.node_status_store import update_node_status
+    
+    # 验证 Node 存在
+    node_repo = NodeRepository(db)
+    db_node = node_repo.get(node_id)
+    
+    if not db_node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    # 更新 runtime 和 model（如果提供）
+    update_fields = {}
+    
+    if report_data.get("runtime"):
+        runtime = report_data["runtime"]
+        update_fields["runtime"] = runtime.get("type", "ollama")
+        update_fields["model"] = ",".join(runtime.get("loaded_models", []))
+    
+    if report_data.get("capacity"):
+        cap = report_data["capacity"]
+        if cap.get("max_concurrency_total"):
+            update_fields["max_concurrency"] = cap["max_concurrency_total"]
+    
+    if update_fields:
+        node_repo.update(node_id, **update_fields)
+    
+    # 更新到 NodeStatusStore（包含 capacity info）
+    update_node_status(node_id, report_data)
+    
+    # 检查 Cluster ID 变化（通过 Match Engine）
+    new_cluster_id = None
+    try:
+        # 获取新的 cluster_id
+        from ..services.cluster_builder import build_cluster_id
+        
+        models = report_data.get("runtime", {}).get("loaded_models", [])
+        if models:
+            # 使用第一個模型作为代表
+            primary_model = models[0]
+            
+            new_cluster_id = build_cluster_id(
+                region=db_node.region,
+                stake_tier="personal",  # TODO: 从 Node 的 stake_tier 获取
+                models=models,
+                quality_score=0.9,  # TODO: 从历史数据获取
+                success_rate=0.95,  # TODO: 从历史数据获取
+            )
+            
+            if db_node.cluster_id != new_cluster_id:
+                node_repo.update(node_id, cluster_id=new_cluster_id)
+                logger.info(f"Node {node_id} cluster updated: {db_node.cluster_id} -> {new_cluster_id}")
+    except Exception as e:
+        logger.error(f"Failed to update cluster_id: {e}")
+    
+    return {
+        "received": True,
+        "node_id": node_id,
+        "timestamp": report_data.get("timestamp"),
+        "new_cluster_id": new_cluster_id,
     }
 
 

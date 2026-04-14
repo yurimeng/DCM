@@ -12,9 +12,12 @@ import uuid
 
 class EscrowStatus(str, Enum):
     """Escrow 状态"""
-    LOCKED = "locked"      # 已锁定
-    SETTLED = "settled"    # 已结算
-    REFUNDED = "refunded"  # 已退款
+    PENDING = "pending"     # 待锁定
+    LOCKED = "locked"       # 已锁定，等待结算
+    COMPLETED = "completed" # 已完成（等待转账）
+    SETTLED = "settled"     # 已结算
+    REFUNDED = "refunded"   # 已退款
+    CANCELLED = "cancelled"  # 已取消
 
 
 class Escrow(BaseModel):
@@ -30,8 +33,17 @@ class Escrow(BaseModel):
     
     status: EscrowStatus = Field(default=EscrowStatus.LOCKED)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    # 结算时间
+    completed_at: Optional[datetime] = None  # Job 完成时间
+    auto_complete_at: Optional[datetime] = None  # 计划自动完成时间
     settled_at: Optional[datetime] = None
     refunded_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    
+    # 取消
+    cancelled_by: Optional[str] = None  # 谁取消了
+    cancel_reason: Optional[str] = None
     
     # 结算详情
     actual_tokens: Optional[int] = None
@@ -45,17 +57,40 @@ class Escrow(BaseModel):
 
 class EscrowResponse(BaseModel):
     """Escrow API 响应"""
+    escrow_id: str
     job_id: str
     locked_amount: float
     spent_amount: float
     refund_amount: float
     status: EscrowStatus
+    created_at: datetime
     
-    # 结算后补充
+    # 时间
+    completed_at: Optional[datetime] = None
+    auto_complete_at: Optional[datetime] = None
+    settled_at: Optional[datetime] = None
+    refunded_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    
+    # 结算详情
     actual_tokens: Optional[int] = None
     actual_cost: Optional[float] = None
     platform_fee: Optional[float] = None
     node_earn: Optional[float] = None
+    
+    # 取消
+    cancelled_by: Optional[str] = None
+    cancel_reason: Optional[str] = None
+
+
+class EscrowCancelRequest(BaseModel):
+    """取消 Escrow 请求"""
+    reason: str = Field(..., description="取消原因")
+
+
+class EscrowCompleteRequest(BaseModel):
+    """手动完成 Escrow 请求"""
+    pass
 
 
 class SettlementRequest(BaseModel):

@@ -154,10 +154,17 @@ async def get_job(
         "final_price": db_job.final_price,
         "retry_count": db_job.retry_count,
         "escrow": {
+            "escrow_id": db_escrow.escrow_id if db_escrow else None,
             "locked_amount": db_escrow.locked_amount if db_escrow else None,
             "spent_amount": db_escrow.spent_amount if db_escrow else None,
             "refund_amount": db_escrow.refund_amount if db_escrow else None,
             "status": _safe_status(db_escrow.status) if db_escrow else None,
+            "completed_at": db_escrow.completed_at.isoformat() if db_escrow and db_escrow.completed_at else None,
+            "auto_complete_at": db_escrow.auto_complete_at.isoformat() if db_escrow and db_escrow.auto_complete_at else None,
+            "settled_at": db_escrow.settled_at.isoformat() if db_escrow and db_escrow.settled_at else None,
+            "cancelled_at": db_escrow.cancelled_at.isoformat() if db_escrow and db_escrow.cancelled_at else None,
+            "cancelled_by": db_escrow.cancelled_by if db_escrow else None,
+            "cancel_reason": db_escrow.cancel_reason if db_escrow else None,
         } if db_escrow else None,
         "match_id": matching_service._job_to_match.get(job_id) if job_id in matching_service._job_to_match else None,
     }
@@ -184,13 +191,143 @@ async def get_job_escrow(
         "refund_amount": db_escrow.refund_amount,
         "status": _safe_status(db_escrow.status),
         "created_at": db_escrow.created_at.isoformat() if db_escrow.created_at else None,
+        "completed_at": db_escrow.completed_at.isoformat() if db_escrow.completed_at else None,
+        "auto_complete_at": db_escrow.auto_complete_at.isoformat() if db_escrow.auto_complete_at else None,
         "settled_at": db_escrow.settled_at.isoformat() if db_escrow.settled_at else None,
         "refunded_at": db_escrow.refunded_at.isoformat() if db_escrow.refunded_at else None,
+        "cancelled_at": db_escrow.cancelled_at.isoformat() if db_escrow.cancelled_at else None,
+        "cancelled_by": db_escrow.cancelled_by,
+        "cancel_reason": db_escrow.cancel_reason,
         "actual_tokens": db_escrow.actual_tokens,
         "actual_cost": db_escrow.actual_cost,
         "platform_fee": db_escrow.platform_fee,
         "node_earn": db_escrow.node_earn,
         "refund_reason": db_escrow.refund_reason,
+    }
+
+
+@router.post("/{job_id}/escrow/cancel")
+async def cancel_job_escrow(
+    job_id: str,
+    cancel_data: dict,
+    db: Session = Depends(get_db)
+):
+    """
+    取消 Job 的 Escrow（全额退款）
+    
+    只能在 COMPLETED 之前取消（LOCKED 或 COMPLETED 状态）
+    """
+    from datetime import datetime
+    from ..models.db_models import EscrowDB, EscrowStatusDB
+    from ..services.settlement_config import settlement_config
+    
+    reason = cancel_data.get("reason", "User cancelled")
+    cancelled_by = cancel_data.get("cancelled_by", "user")
+    
+    # 验证 Job 存在
+    job_repo = JobRepository(db)
+    db_job = job_repo.get(job_id)
+    if not db_job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # 检查 Escrow 是否存在
+    escrow_repo = EscrowRepository(db)
+    db_escrow = escrow_repo.get_by_job(job_id)
+    if not db_escrow:
+        raise HTTPException(status_code=404, detail="Escrow not found")
+    
+    # 检查是否允许取消
+    if not settlement_config.escrow_allow_cancellation:
+        raise HTTPException(status_code=400, detail="Escrow cancellation is not allowed")
+    
+    # 检查状态
+    if db_escrow.status not in [EscrowStatusDB.LOCKED, EscrowStatusDB.COMPLETED]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel: escrow status is {db_escrow.status.value}"
+        )
+    
+    # 执行取消
+    db_escrow.status = EscrowStatusDB.CANCELLED
+    db_escrow.refund_amount = db_escrow.locked_amount
+    db_escrow.cancelled_at = datetime.utcnow()
+    db_escrow.cancelled_by = cancelled_by
+    db_escrow.cancel_reason = reason
+    db.commit()
+    db.refresh(db_escrow)
+    
+    return {
+        "success": True,
+        "job_id": job_id,
+        "status": "cancelled",
+        "refund_amount": db_escrow.refund_amount,
+        "cancelled_at": db_escrow.cancelled_at.isoformat() if db_escrow.cancelled_at else None,
+        "cancel_reason": reason,
+    }
+
+
+@router.post("/{job_id}/escrow/settle")
+async def settle_job_escrow(
+    job_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    手动结算 Job 的 Escrow（跳过延迟等待）
+    """
+    from datetime import datetime
+    from ..models.db_models import EscrowDB, EscrowStatusDB
+    from ..services.settlement_config import settlement_config
+    from config import settings
+    
+    # 验证 Job 存在
+    job_repo = JobRepository(db)
+    db_job = job_repo.get(job_id)
+    if not db_job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # 检查 Escrow 是否存在
+    escrow_repo = EscrowRepository(db)
+    db_escrow = escrow_repo.get_by_job(job_id)
+    if not db_escrow:
+        raise HTTPException(status_code=404, detail="Escrow not found")
+    
+    # 检查状态
+    if db_escrow.status not in [EscrowStatusDB.LOCKED, EscrowStatusDB.COMPLETED]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot settle: escrow status is {db_escrow.status.value}"
+        )
+    
+    # 计算结算金额
+    actual_tokens = db_job.actual_output_tokens or 0
+    actual_cost = round(db_escrow.locked_amount * actual_tokens / (db_job.input_tokens + db_job.output_tokens_limit), 8) if (db_job.input_tokens + db_job.output_tokens_limit) > 0 else db_escrow.locked_amount
+    
+    # 结算分配
+    platform_fee = actual_cost * settlement_config.platform_fee_rate
+    node_earn = actual_cost * settlement_config.node_earn_rate
+    refund_amount = db_escrow.locked_amount - actual_cost
+    
+    # 更新 Escrow
+    db_escrow.status = EscrowStatusDB.SETTLED
+    db_escrow.settled_at = datetime.utcnow()
+    db_escrow.spent_amount = actual_cost
+    db_escrow.refund_amount = max(0, refund_amount)
+    db_escrow.actual_tokens = actual_tokens
+    db_escrow.actual_cost = actual_cost
+    db_escrow.platform_fee = platform_fee
+    db_escrow.node_earn = node_earn
+    db.commit()
+    db.refresh(db_escrow)
+    
+    return {
+        "success": True,
+        "job_id": job_id,
+        "status": "settled",
+        "spent_amount": db_escrow.spent_amount,
+        "refund_amount": db_escrow.refund_amount,
+        "platform_fee": db_escrow.platform_fee,
+        "node_earn": db_escrow.node_earn,
+        "settled_at": db_escrow.settled_at.isoformat() if db_escrow.settled_at else None,
     }
 @router.get("/reconciliation/status")
 async def reconciliation_status(db: Session = Depends(get_db)):

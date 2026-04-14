@@ -1,19 +1,80 @@
 """
-Node Models - DCM v3.0
-Node = Slot 集合 + 资源调度器
+Node Models - DCM v3.2
+Node = 计算能力(capability) + 实时状态(state) + 市场报价(pricing) 的算力原子单元
 """
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, model_validator
 from typing import List, Optional, Dict, Any
-from datetime import datetime
 from enum import Enum
 
 
+# ===== 嵌套结构 =====
+
+class Location(BaseModel):
+    """地理位置信息"""
+    region: str = Field(default="unknown", description="区域")
+    hostname: str = Field(default="", description="主机名")
+
+
+class Hardware(BaseModel):
+    """硬件信息 (自动生成)"""
+    gpu_type: str = Field(default="unknown", description="GPU 型号")
+    gpu_count: int = Field(default=1, ge=1, description="GPU 数量")
+    vram_per_gpu_gb: float = Field(default=0.0, description="每卡显存 (GB)")
+
+
+class Runtime(BaseModel):
+    """运行时信息 (随状态更新)"""
+    type: str = Field(default="", description="Runtime 类型: ollama, vllm, tensorrt")
+    loaded_models: List[str] = Field(default_factory=list, description="已加载模型列表")
+
+
+class Capability(BaseModel):
+    """计算能力 (自动计算)"""
+    max_concurrency_total: int = Field(default=1, ge=1, description="最大并发总数")
+    tokens_per_sec: int = Field(default=0, description="Token 吞吐量 (tokens/sec)")
+    max_queue_tokens: int = Field(default=1500, ge=1, description="最大队列 (tokens)")
+
+
+class Pricing(BaseModel):
+    """市场报价 (用户定义，随时可调整)"""
+    ask_price_usdc_per_mtoken: float = Field(default=0.5, gt=0, description="报价 (USDC/1M tokens)")
+
+
+class Reliability(BaseModel):
+    """可靠性指标 (统计下发)"""
+    avg_latency_ms: int = Field(default=0, ge=0, description="平均延迟 (ms)")
+    success_rate: float = Field(default=0.95, ge=0, le=1, description="成功率")
+    quality_score: float = Field(default=0.9, ge=0, le=1, description="质量评分")
+
+
+class Economy(BaseModel):
+    """经济模型"""
+    stake_amount: float = Field(default=0.0, description="已质押金额")
+    stake_required: float = Field(default=0.0, description="所需质押金额")
+    stake_tier: str = Field(default="personal", description="质押等级: personal, professional, enterprise")
+
+
+class NodeState(BaseModel):
+    """实时状态 (随心跳更新)"""
+    status: str = Field(default="offline", description="状态: offline, online, busy, locked")
+    active_jobs: int = Field(default=0, ge=0, description="活跃 Job 数")
+    available_concurrency: int = Field(default=1, ge=0, description="可用并发数")
+    available_queue_tokens: int = Field(default=1500, ge=0, description="可用队列 tokens")
+
+
+class Network(BaseModel):
+    """网络/集群信息"""
+    cluster_id: Optional[str] = Field(None, description="所属 Cluster ID")
+
+
+# ===== Tier 枚举 =====
+
 class NodeTier(str, Enum):
-    """Node 等级"""
-    PERSONAL = "personal"    # 个人 (< 4 GPU)
-    PROFESSIONAL = "professional"  # 专业 (4-8 GPU)
-    ENTERPRISE = "enterprise"  # 企业 (> 8 GPU)
+    """Node 等级分类"""
+    PERSONAL = "personal"      # < 4 GPU
+    PROFESSIONAL = "professional"  # 4-7 GPU
+    ENTERPRISE = "enterprise"  # >= 8 GPU
 
 
 class NodeStatus(str, Enum):
@@ -24,159 +85,218 @@ class NodeStatus(str, Enum):
     LOCKED = "locked"
 
 
+# ===== 主模型 =====
+
 class NodeCreate(BaseModel):
     """Node 创建请求"""
-    gpu_type: str = Field(..., description="GPU 类型（如 RTX4090, A100）")
-    vram_gb: int = Field(..., gt=0, description="VRAM 大小（GB）")
-    model_support: List[str] = Field(default=["qwen2.5:7b"], description="支持的模型列表")
-    ask_price: float = Field(..., gt=0, description="报价（USDC/1M tokens）")
-    avg_latency: int = Field(..., gt=0, description="历史平均延迟（ms）")
-    avg_success_rate: float = Field(default=0.95, ge=0, le=1, description="平均成功率 (0-1)")
-    avg_quality_score: float = Field(default=0.9, ge=0, le=1, description="平均质量评分 (0-1)")
-    region: str = Field(..., description="地理区域")
-    gpu_count: int = Field(default=1, ge=1, description="GPU 数量")
+    # 基础信息
+    user_id: str = Field(..., description="用户 ID (服务器所有者)")
     
-    @field_validator("model_support")
-    @classmethod
-    def validate_model_support(cls, v: List[str]) -> List[str]:
-        allowed = ["qwen2.5:7b", "qwen3.5:latest", "gemma4:e4b", "llama3-8b"]
-        for m in v:
-            if m not in allowed:
-                raise ValueError(f"Model {m} not supported")
-        return v
+    # 可选字段 (可以为空，后续心跳更新)
+    location: Optional[Location] = None
+    hardware: Optional[Hardware] = None
+    runtime: Optional[Runtime] = None
+    pricing: Optional[Pricing] = None
+    
+    @model_validator(mode='after')
+    def init_defaults(self) -> 'NodeCreate':
+        """初始化默认值"""
+        if self.location is None:
+            self.location = Location()
+        if self.hardware is None:
+            self.hardware = Hardware()
+        if self.runtime is None:
+            self.runtime = Runtime()
+        if self.pricing is None:
+            self.pricing = Pricing()
+        return self
 
 
 class Node(BaseModel):
-    """Node 资源容器
-    
-    Node = Slot 集合 + 资源调度器
-    包含多个 Slots 和 Workers
     """
-    node_id: str
+    Node 算力原子单元 - DCM v3.2
     
-    # 资源信息
-    gpu_type: str
-    vram_gb: int
-    gpu_count: int = Field(default=1, ge=1, description="GPU 数量")
-    model_support: List[str] = []
-    ask_price: float
-    avg_latency: int
-    avg_success_rate: float = 0.95
-    avg_quality_score: float = 0.9
-    region: str
+    Node 是一个同时具备:
+    - 计算能力 (capability)
+    - 实时状态 (state)
+    - 市场报价 (pricing)
     
-    # Slot 和 Worker 引用（实际数据在其他地方）
-    slot_ids: List[str] = Field(default_factory=list, description="Slot ID 列表")
-    worker_ids: List[str] = Field(default_factory=list, description="Worker ID 列表")
+    的算力原子单元
     
-    # 状态
-    status: NodeStatus = NodeStatus.OFFLINE
-    stake_amount: float = 0.0
-    stake_required: float = 0.0
-    stake_tier: NodeTier = NodeTier.PERSONAL
+    Cluster 分配:
+    - Node 注册时自动分配 cluster_id
+    - 依据: region -> stake_tier -> loaded_models -> reliability
+    - 在 Node Capacity Report 时检查是否需要更新
+    """
+    # ===== 标识 =====
+    node_id: str = Field(default="", description="Node ID (自动生成)")
+    user_id: str = Field(default="", description="用户 ID (关联钱包，影响收入)")
     
-    # 元数据
-    registered_at: Optional[datetime] = None
-    last_heartbeat: Optional[datetime] = None
-    metadata: dict = Field(default_factory=dict)
+    # ===== 嵌套结构 =====
+    location: Location = Field(default_factory=Location, description="地理位置")
+    hardware: Hardware = Field(default_factory=Hardware, description="硬件信息")
+    runtime: Runtime = Field(default_factory=Runtime, description="运行时信息")
+    capability: Capability = Field(default_factory=Capability, description="计算能力")
+    pricing: Pricing = Field(default_factory=Pricing, description="市场报价")
+    reliability: Reliability = Field(default_factory=Reliability, description="可靠性指标")
+    economy: Economy = Field(default_factory=Economy, description="经济模型")
+    state: NodeState = Field(default_factory=NodeState, description="实时状态")
+    network: Network = Field(default_factory=Network, description="网络/集群信息")
     
-    def get_stake_tier(self) -> NodeTier:
-        """根据 GPU 数量确定等级"""
-        if self.gpu_count >= 8:
+    # ===== Cluster 分配方法 =====
+    
+    def assign_cluster(self) -> str:
+        """
+        根据 Node 属性分配 Cluster ID
+        
+        依据: region -> stake_tier -> loaded_models -> reliability
+        格式: cluster_{region}_{stake_tier}_{model_family}_{reliability_tier}
+        
+        Returns:
+            Cluster ID
+        """
+        from src.services.cluster_builder import build_cluster_id
+        
+        self.network.cluster_id = build_cluster_id(
+            region=self.location.region,
+            stake_tier=self.economy.stake_tier,
+            models=self.runtime.loaded_models,
+            reliability=self.reliability
+        )
+        return self.network.cluster_id
+    
+    def check_and_update_cluster(self) -> Optional[str]:
+        """
+        检查并更新 Cluster ID
+        
+        在 Node Capacity Report 时调用
+        如果 region/stake_tier/models/reliability 变化则更新
+        
+        Returns:
+            新的 cluster_id 或 None
+        """
+        from src.services.cluster_builder import update_node_cluster
+        
+        return update_node_cluster(self)
+    
+    # ===== 兼容字段 (扁平化接口) =====
+    # 为了向后兼容，保留一些扁平字段的 getter/setter
+    
+    @property
+    def status(self) -> str:
+        """兼容属性"""
+        return self.state.status
+    
+    @status.setter
+    def status(self, v: str) -> None:
+        self.state.status = v
+    
+    @property
+    def gpu_type(self) -> str:
+        return self.hardware.gpu_type
+    
+    @property
+    def gpu_count(self) -> int:
+        return self.hardware.gpu_count
+    
+    @property
+    def avg_latency_ms(self) -> int:
+        return self.reliability.avg_latency_ms
+    
+    @property
+    def success_rate(self) -> float:
+        return self.reliability.success_rate
+    
+    @property
+    def ask_price(self) -> float:
+        return self.pricing.ask_price_usdc_per_mtoken
+    
+    @property
+    def available_concurrency(self) -> int:
+        return self.state.available_concurrency
+    
+    @property
+    def available_queue_tokens(self) -> int:
+        return self.state.available_queue_tokens
+    
+    # ===== 方法 =====
+    
+    def is_available(self) -> bool:
+        """Node 是否可用"""
+        return self.state.status in ["online", "busy"] and self.state.available_concurrency > 0
+    
+    def is_idle(self) -> bool:
+        """Node 是否空闲"""
+        return self.state.available_queue_tokens > 0
+    
+    def get_tier(self) -> NodeTier:
+        """根据 GPU 数量获取等级"""
+        if self.hardware.gpu_count >= 8:
             return NodeTier.ENTERPRISE
-        elif self.gpu_count >= 4:
+        elif self.hardware.gpu_count >= 4:
             return NodeTier.PROFESSIONAL
         return NodeTier.PERSONAL
     
     def get_stake_required(self) -> float:
-        """根据等级确定所需 Stake"""
-        tier = self.get_stake_tier()
+        """获取所需质押"""
+        tier = self.get_tier()
         if tier == NodeTier.ENTERPRISE:
             return 1000.0
         elif tier == NodeTier.PROFESSIONAL:
-            return 500.0
-        return 200.0
+            return 200.0
+        return 50.0
     
-    def add_slot(self, slot_id: str) -> None:
-        """添加 Slot"""
-        if slot_id not in self.slot_ids:
-            self.slot_ids.append(slot_id)
+    def update_state(self, live_status: Dict) -> None:
+        """从 Node Live Status Report 更新状态"""
+        if "status" in live_status:
+            self.state.status = live_status["status"].get("vram_used_gb", "online")
+        if "capacity" in live_status:
+            self.state.available_concurrency = live_status["capacity"].get("max_concurrency_available", 1)
+        if "load" in live_status:
+            self.state.active_jobs = live_status["load"].get("active_jobs", 0)
+            self.state.available_queue_tokens = live_status["load"].get("available_token_capacity", 0)
     
-    def remove_slot(self, slot_id: str) -> None:
-        """移除 Slot"""
-        if slot_id in self.slot_ids:
-            self.slot_ids.remove(slot_id)
-    
-    def add_worker(self, worker_id: str) -> None:
-        """添加 Worker"""
-        if worker_id not in self.worker_ids:
-            self.worker_ids.append(worker_id)
-    
-    def remove_worker(self, worker_id: str) -> None:
-        """移除 Worker"""
-        if worker_id in self.worker_ids:
-            self.worker_ids.remove(worker_id)
-    
-    def is_online(self) -> bool:
-        """检查是否在线"""
-        return self.status == NodeStatus.ONLINE
+    def update_capacity(self, capacity_report: Dict) -> None:
+        """从 Node Capacity Report 更新能力"""
+        if "capacity" in capacity_report:
+            cap = capacity_report["capacity"]
+            self.capability.max_concurrency_total = cap.get("max_concurrency_total", 1)
+            self.state.available_concurrency = cap.get("max_concurrency_available", cap.get("max_concurrency_total", 1))
+        
+        if "runtime" in capacity_report:
+            rt = capacity_report["runtime"]
+            self.runtime.type = rt.get("type", "")
+            self.runtime.loaded_models = rt.get("loaded_models", [])
+        
+        if "performance" in capacity_report:
+            perf = capacity_report["performance"]
+            self.capability.tokens_per_sec = perf.get("max_token_throughput", 0)
 
 
 class NodeResponse(BaseModel):
     """Node API 响应"""
     node_id: str
-    status: NodeStatus
+    user_id: str
+    status: str
     stake_required: float
-    stake_amount: float
+    gpu_type: str
     gpu_count: int
-    slot_count: int
-    worker_count: int
-    next_step: str
-
-
-class NodeHeartbeat(BaseModel):
-    """Node 心跳"""
-    status: str = "online"
-    current_jobs: int = 0
-
-
-class NodeResultSubmit(BaseModel):
-    """Node 提交结果"""
-    result: str = Field(..., description="Base64 编码的推理结果")
-    result_hash: str = Field(..., description="结果 SHA256 哈希")
-    actual_latency_ms: int = Field(..., ge=0)
-    actual_output_tokens: int = Field(..., ge=0)
 
 
 class NodePollResponse(BaseModel):
-    """Node 轮询响应 - 完整的 invoke 结构"""
+    """Node 轮询响应"""
     has_job: bool
-    execution_id: Optional[str] = None  # 执行ID
     job_id: Optional[str] = None
-    slot_id: Optional[str] = None
-    
-    model: Optional[dict] = None  # {"name": "qwen3-8b", "family": "qwen", "context_window": 32768}
-    
-    input: Optional[dict] = None  # OpenAI 格式的 input
-    # {
-    #     "type": "chat_completion",
-    #     "messages": [...],
-    #     "prompt_raw": null
-    # }
-    
-    generation: Optional[dict] = None  # 生成参数
-    # {
-    #     "max_tokens": 512,
-    #     "temperature": 0.7,
-    #     "top_p": 0.9,
-    #     "stream": false
-    # }
-    
-    runtime: Optional[dict] = None  # 运行时信息
-    # {
-    #     "backend": "ollama",
-    #     "api_style": "openai"
-    # }
-    
-    locked_price: Optional[float] = None
-    message: Optional[str] = None
+    model: Optional[str] = None
+    timeout_seconds: Optional[int] = None
+    pre_lock_expires_at: Optional[str] = None
+
+
+class NodeResultSubmit(BaseModel):
+    """Node 结果提交"""
+    match_id: str
+    result: str
+    result_hash: Optional[str] = None
+    actual_latency_ms: int
+    actual_tokens: int
+    error_message: Optional[str] = None

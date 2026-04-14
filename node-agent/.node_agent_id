@@ -1,1 +1,1 @@
-{"node_id": "412cb3f5-1ac4-41e7-934b-0a457087275a", "model": "qwen2.5:7b", "gpu_count": 1, "slot_count": 4, "worker_count": 2, "dcm_url": "https://dcm-api-p00a.onrender.com"}
+{"node_id": "e118255d-174b-4bd6-8621-05a6a15ad53f", "model": "qwen2.5:7b", "gpu_count": 1, "slot_count": 4, "worker_count": 2, "dcm_url": "https://dcm-api-p00a.onrender.com", "p2p_enabled": false, "relay_enabled": true}

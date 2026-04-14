@@ -16,6 +16,7 @@ from ..repositories import JobRepository, MatchRepository, EscrowRepository, Nod
 from ..services import matching_service, escrow_service, verification_service, retry_service, stake_service
 from ..services.retry import FailureType
 from config import settings
+from ..services.settlement_config import settlement_config
 
 router = APIRouter(prefix="/internal/v1", tags=["internal"])
 
@@ -44,6 +45,138 @@ async def health_check():
     }
 
 
+@router.get("/config/job")
+async def get_job_config():
+    """
+    获取 Job 配置
+    
+    GET /internal/v1/config/job
+    
+    返回当前 Job 配置（从 job_config 读取）
+    """
+    from ..services.job_config import get_job_config
+    
+    config = get_job_config()
+    return {
+        "max_output_tokens": config.max_output_tokens,
+        "max_input_tokens": config.max_input_tokens,
+        "max_latency_ms": config.max_latency_ms,
+        "min_latency_ms": config.min_latency_ms,
+        "default_output_tokens": config.default_output_tokens,
+        "max_bid_price": config.max_bid_price,
+        "min_bid_price": config.min_bid_price,
+        "max_retries": config.max_retries,
+    }
+
+
+@router.post("/config/job/reload")
+async def reload_job_config_endpoint():
+    """
+    重新加载 Job 配置
+    
+    POST /internal/v1/config/job/reload
+    
+    从环境变量重新加载配置
+    """
+    from ..services.job_config import reload_job_config
+    
+    config = reload_job_config()
+    return {
+        "status": "reloaded",
+        "config": {
+            "max_output_tokens": config.max_output_tokens,
+            "max_input_tokens": config.max_input_tokens,
+            "max_latency_ms": config.max_latency_ms,
+            "min_latency_ms": config.min_latency_ms,
+            "default_output_tokens": config.default_output_tokens,
+            "max_bid_price": config.max_bid_price,
+            "min_bid_price": config.min_bid_price,
+            "max_retries": config.max_retries,
+        }
+    }
+
+
+
+
+
+@router.get("/runtimes")
+async def get_runtimes():
+    """
+    获取支持的运行时列表
+    GET /internal/v1/runtimes
+    Node Agent 可以调用此接口获取运行时配置
+    """
+    import yaml
+    try:
+        with open("config/models.yaml", "r") as f:
+            config = yaml.safe_load(f)
+        runtimes = config.get("runtimes", {})
+        return {"runtimes": runtimes, "default": "ollama"}
+    except Exception:
+        return {
+            "runtimes": {
+                "ollama": {"endpoint": "http://localhost:11434", "timeout": 60, "api_format": "ollama"},
+                "vllm": {"endpoint": "http://localhost:8000/v1", "timeout": 60, "api_format": "openai"},
+            },
+            "default": "ollama",
+        }
+
+
+@router.get("/nodes/orphans")
+async def get_orphan_nodes():
+    """
+    获取孤儿节点（节点有user_id但用户node_ids中没有该节点）
+    GET /internal/v1/nodes/orphans
+    """
+    from ..database import SessionLocal
+    from ..repositories import NodeRepository, UserRepository
+    from ..models.db_models import NodeDB
+    import json
+    
+    db = SessionLocal()
+    try:
+        node_repo = NodeRepository(db)
+        user_repo = UserRepository(db)
+        
+        orphan_nodes = []
+        
+        # Get all nodes with user_id
+        nodes = db.query(NodeDB).filter(NodeDB.user_id.isnot(None)).all()
+        
+        for node in nodes:
+            user_id = node.user_id
+            node_id = node.node_id
+            
+            # Check if user exists and has this node in node_ids
+            user = user_repo.get(user_id)
+            if not user:
+                # User not found
+                orphan_nodes.append({
+                    "node_id": node_id,
+                    "user_id": user_id,
+                    "reason": "user_not_found",
+                    "gpu_type": node.gpu_type,
+                    "status": node.status,
+                })
+            else:
+                user_node_ids = json.loads(user.node_ids or "[]")
+                if node_id not in user_node_ids:
+                    # User doesn't have this node in node_ids
+                    orphan_nodes.append({
+                        "node_id": node_id,
+                        "user_id": user_id,
+                        "reason": "node_not_in_user_list",
+                        "gpu_type": node.gpu_type,
+                        "status": node.status,
+                        "user_node_ids": user_node_ids,
+                    })
+        
+        return {
+            "orphan_count": len(orphan_nodes),
+            "orphan_nodes": orphan_nodes,
+        }
+    finally:
+        db.close()
 
 
 # ===== 请求/响应模型 =====
@@ -480,11 +613,11 @@ async def execute_settlement_endpoint(
     
     # 应用降价（如果有）
     if is_mild_penalty:
-        actual_cost *= settings.mild_latency_penalty
+        actual_cost *= settlement_config.latency_threshold_mild / 1000 if settlement_config.latency_threshold_mild > 100 else settlement_config.latency_threshold_mild / 1000
     
     # 计算分配
-    platform_fee = actual_cost * settings.platform_fee_rate
-    node_earn = actual_cost * settings.node_earn_rate
+    platform_fee = actual_cost * settlement_config.platform_fee_rate
+    node_earn = actual_cost * settlement_config.node_earn_rate
     refund_amount = db_escrow.locked_amount - actual_cost
     
     # 更新 Escrow

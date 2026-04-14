@@ -33,9 +33,12 @@ class NodeStatusDB(str, enum.Enum):
 
 class EscrowStatusDB(str, enum.Enum):
     """Escrow 状态"""
-    LOCKED = "locked"
-    SETTLED = "settled"
-    REFUNDED = "refunded"
+    PENDING = "pending"     # 待锁定
+    LOCKED = "locked"       # 已锁定，等待结算
+    COMPLETED = "completed" # 已完成（等待自动转账）
+    SETTLED = "settled"     # 已结算
+    REFUNDED = "refunded"   # 已退款
+    CANCELLED = "cancelled"  # 已取消
 
 
 class NodeTierDB(str, enum.Enum):
@@ -88,6 +91,24 @@ class NodeDB(Base):
     node_id = Column(String(36), primary_key=True)
     gpu_type = Column(String(50), nullable=False)
     vram_gb = Column(Integer, nullable=False)
+    gpu_count = Column(Integer, default=1)
+    
+    # ===== GPU DETAILS (from system_info.py) =====
+    # GPU 详细信息（来自 system_info.py）
+    gpu_qty = Column(Integer, default=1)  # GPU 数量
+    gpu_vram_gb = Column(Float, default=0.0)  # 每卡显存 GB
+    gpu_pooled = Column(Boolean, default=False)  # 是否可池化
+    
+    # ===== OS INFO (from system_info.py) =====
+    # 操作系统信息（来自 system_info.py）
+    os_name = Column(String(50), nullable=True)  # 操作系统名称
+    os_version = Column(String(50), nullable=True)  # 操作系统版本
+    hostname = Column(String(100), nullable=True)  # 主机名
+    
+    # ===== REQUIRED: runtime and model =====
+    runtime = Column(String(20), nullable=False)  # ollama, vllm, tensorrt
+    model = Column(String(50), nullable=False)  # qwen2.5:7b, llama3:8b
+    
     model_support = Column(Text, nullable=False)  # JSON array
     ask_price = Column(Float, nullable=False)
     avg_latency = Column(Integer, nullable=False)
@@ -100,6 +121,9 @@ class NodeDB(Base):
     
     registered_at = Column(DateTime, default=datetime.utcnow)
     last_heartbeat = Column(DateTime, nullable=True)
+    
+    # 用户绑定（注册时从 NodeCreate.user_id 获取）
+    user_id = Column(String(36), nullable=True, index=True)
     
     # 关联
     stake_record = relationship("StakeRecordDB", back_populates="node", uselist=False)
@@ -156,8 +180,17 @@ class EscrowDB(Base):
     
     status = Column(SQLEnum(EscrowStatusDB), default=EscrowStatusDB.LOCKED)
     created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # 时间字段
+    completed_at = Column(DateTime, nullable=True)  # Job 完成时间
+    auto_complete_at = Column(DateTime, nullable=True)  # 计划自动完成时间
     settled_at = Column(DateTime, nullable=True)
     refunded_at = Column(DateTime, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    
+    # 取消信息
+    cancelled_by = Column(String(50), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
     
     # 结算详情
     actual_tokens = Column(Integer, nullable=True)
@@ -228,6 +261,101 @@ class WalletAccountDB(Base):
     role = Column(String(20), nullable=False)  # buyer, node, system
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ==================== User Models / 用户模型 ====================
+
+class UserDB(Base):
+    """
+    User Database Model
+    用户数据库模型
+    
+    Primary Key: user_id (UUID)
+    邮箱作为唯一标识（但不是主键）
+    
+    Supports multiple auth providers:
+    - Google OAuth
+    - GitHub OAuth
+    - Email + Password
+    
+    Binds to Node for reputation sync
+    """
+    __tablename__ = "users"
+    
+    # Primary key: UUID
+    user_id = Column(String(36), primary_key=True)  # UUID as primary key
+    
+    # Auth info
+    auth_provider = Column(String(20), nullable=False)  # google, github, email
+    oauth_id = Column(String(100), nullable=True)  # OAuth provider user ID
+    oauth_email = Column(String(255), nullable=True)  # OAuth email (for OAuth users)
+    password_hash = Column(String(100), nullable=True)  # bcrypt hash
+    
+    # Unique identifier: email (not primary key, but unique)
+    email = Column(String(255), nullable=False, unique=True, index=True)  # Email (unique)
+    
+    # Profile
+    username = Column(String(50), nullable=True, unique=True, index=True)
+    avatar_url = Column(String(500), nullable=True)
+    
+    # Role & Status
+    role = Column(String(20), default="user")  # user, node_operator, admin
+    status = Column(String(20), default="active")  # active, suspended, deleted
+    
+    # Node binding (1:N - 用户可以有多个节点)
+    # 节点绑定（系统自动维护）
+    # 存储为 JSON 字符串: ["node_id_1", "node_id_2"]
+    node_ids = Column(Text, nullable=True, default="[]")  # JSON array of node_ids
+    bound_at = Column(DateTime, nullable=True)  # 最后绑定时间
+    
+    # Wallet binding (for settlement)
+    # 钱包绑定（用于结算）
+    wallet_address = Column(String(100), nullable=True, index=True)
+    wallet_type = Column(String(20), nullable=True)  # evm, solana, etc.
+    wallet_verified = Column(Boolean, default=False)
+    
+    # Reputation
+    # 声誉评分
+    reputation_score = Column(Float, default=0.5)  # 0.0 - 1.0
+    total_jobs = Column(Integer, default=0)
+    successful_jobs = Column(Integer, default=0)
+    failed_jobs = Column(Integer, default=0)
+    
+    # Stats
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_login = Column(DateTime, nullable=True)
+    login_count = Column(Integer, default=0)
+    
+    # Metadata (JSON)
+    user_metadata = Column(Text, nullable=True)  # JSON string
+    
+    def __repr__(self):
+        return f"<UserDB(user_id={self.user_id}, email={self.email})>"
+
+
+class UserSessionDB(Base):
+    """
+    User Session Database Model
+    用户会话数据库模型
+    
+    For JWT token management
+    """
+    __tablename__ = "user_sessions"
+    
+    session_id = Column(String(36), primary_key=True)
+    user_id = Column(String(36), ForeignKey("users.user_id"), nullable=False, index=True)
+    token = Column(String(500), nullable=False, unique=True, index=True)
+    
+    # Session info
+    ip_address = Column(String(50), nullable=True)
+    user_agent = Column(String(500), nullable=True)
+    
+    # Expiration
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Status
+    is_active = Column(Boolean, default=True)
 
 
 class WalletTransactionDB(Base):

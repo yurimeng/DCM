@@ -1,5 +1,9 @@
 """
 Unit Tests for DCM - Models
+DCM 模型单元测试
+
+Updated for DCM v3.1 (dynamic model families)
+适配 DCM v3.1（动态模型家族）
 """
 
 import pytest
@@ -10,31 +14,34 @@ from src.models.db_models import JobDB, NodeDB, MatchDB, EscrowDB
 
 
 class TestJobModel:
-    """测试 Job Pydantic 模型"""
+    """
+    Test Job Pydantic Model
+    Job Pydantic 模型测试
+    """
     
     def test_job_creation(self):
-        """测试 Job 创建"""
+        """Test Job creation / 测试 Job 创建"""
         job = Job(
-            model="llama3-8b",
+            model_requirement="llama3-8b",
             input_tokens=2048,
-            output_tokens_limit=1024,
+            output_tokens_limit=100,
             max_latency=5000,
             bid_price=0.35,
         )
         
-        assert job.model == "llama3-8b"
+        assert job.model_requirement == "llama3-8b"
         assert job.input_tokens == 2048
-        assert job.output_tokens_limit == 1024
+        assert job.output_tokens_limit == 100
         assert job.bid_price == 0.35
         assert job.status == JobStatus.PENDING
         assert job.retry_count == 0
     
     def test_job_with_callback(self):
-        """测试带回调 URL 的 Job"""
+        """Test Job with callback URL / 测试带回调 URL 的 Job"""
         job = Job(
-            model="llama3-8b",
+            model_requirement="llama3-8b",
             input_tokens=2048,
-            output_tokens_limit=1024,
+            output_tokens_limit=100,
             max_latency=5000,
             bid_price=0.35,
             callback_url="https://example.com/callback",
@@ -42,97 +49,131 @@ class TestJobModel:
         
         assert job.callback_url == "https://example.com/callback"
     
-    def test_invalid_model_raises_error(self):
-        """测试无效模型抛出错误"""
-        with pytest.raises(ValueError) as exc_info:
-            Job(
-                model="gpt-4",  # MVP 不支持
-                input_tokens=2048,
-                output_tokens_limit=1024,
-                max_latency=5000,
-                bid_price=0.35,
-            )
+    def test_generic_job(self):
+        """
+        Test generic Job (no model requirement)
+        测试通用 Job（无模型要求）
+        """
+        job = Job(
+            model_requirement=None,
+            input_tokens=2048,
+            output_tokens_limit=100,
+            max_latency=5000,
+            bid_price=0.35,
+        )
         
-        assert "llama3-8b" in str(exc_info.value)
+        assert job.model_requirement is None
     
     def test_invalid_bid_price(self):
-        """测试无效的 bid_price"""
+        """Test invalid bid_price / 测试无效的 bid_price"""
         with pytest.raises(ValueError):
             Job(
-                model="llama3-8b",
+                model_requirement="llama3-8b",
                 input_tokens=2048,
                 output_tokens_limit=1024,
                 max_latency=5000,
-                bid_price=0,  # 必须 > 0
+                bid_price=0,  # Must be > 0 / 必须 > 0
             )
 
 
 class TestNodeModel:
-    """测试 Node Pydantic 模型"""
+    """
+    Test Node Pydantic Model (v3.1 - Required: runtime and model)
+    Node Pydantic 模型测试（v3.1 - 必填：runtime 和 model）
+    """
     
     def test_node_personal_tier(self):
-        """测试 Personal 分级（< 24 GB）"""
+        """
+        Test Personal tier (< 4 GPU)
+        测试 Personal 分级（< 4 GPU）
+        """
         node = Node(
+            node_id="node-001",
             gpu_type="RTX4090",
-            vram_gb=23,  # < 24 GB 才是 Personal
-            model_support=["llama3-8b"],
+            vram_gb=23,
+            runtime="ollama",
+            model="llama3-8b",
             ask_price=0.30,
             avg_latency=3500,
             region="us-west",
         )
         
         assert node.stake_tier == NodeTier.PERSONAL
-        assert node.stake_required == 50.0
+        # stake_required defaults to 0.0, use get_stake_required() for calculation
+        # stake_required 默认值为 0.0，使用 get_stake_required() 方法计算
         assert node.status == NodeStatus.OFFLINE
+        assert node.runtime == "ollama"
+        assert node.model == "llama3-8b"
     
     def test_node_professional_tier(self):
-        """测试 Professional 分级（24-80 GB）"""
+        """
+        Test Professional tier (4-7 GPU)
+        测试 Professional 分级（4-7 GPU）
+        """
         node = Node(
+            node_id="node-002",
             gpu_type="A100",
             vram_gb=40,
-            model_support=["llama3-8b"],
+            gpu_count=4,  # 4 GPU = Professional / 4 GPU = Professional
+            runtime="vllm",
+            model="qwen2.5:7b",
             ask_price=0.25,
             avg_latency=2500,
             region="us-east",
         )
         
-        assert node.stake_tier == NodeTier.PROFESSIONAL
-        assert node.stake_required == 200.0
+        # Use get_stake_tier() method for correct tier
+        assert node.get_stake_tier() == NodeTier.PROFESSIONAL
     
-    def test_node_datacenter_tier(self):
-        """测试 Data Center 分级（> 80 GB）"""
+    def test_node_enterprise_tier(self):
+        """
+        Test Enterprise tier (>= 8 GPU)
+        测试 Enterprise 分级（>= 8 GPU）
+        """
         node = Node(
+            node_id="node-003",
             gpu_type="A100-80G-8x",
-            vram_gb=640,  # 8x A100 80GB
-            model_support=["llama3-8b"],
+            vram_gb=640,
+            gpu_count=8,  # 8 GPU = Enterprise / 8 GPU = Enterprise
+            runtime="vllm",
+            model="qwen2.5:14b",
             ask_price=0.20,
             avg_latency=2000,
             region="eu-central",
         )
         
-        assert node.stake_tier == NodeTier.DATA_CENTER
-        assert node.stake_required == 1000.0
+        # Use get_stake_tier() method for correct tier
+        assert node.get_stake_tier() == NodeTier.ENTERPRISE
     
-    def test_node_invalid_model_support(self):
-        """测试节点必须支持 llama3-8b"""
-        with pytest.raises(ValueError) as exc_info:
-            Node(
-                gpu_type="RTX4090",
-                vram_gb=24,
-                model_support=["gpt-4"],  # MVP 不支持
-                ask_price=0.30,
-                avg_latency=3500,
-                region="us-west",
-            )
+    def test_node_custom_model(self):
+        """
+        Test node with custom model (no whitelist)
+        测试节点支持任意模型（无白名单）
+        """
+        node = Node(
+            node_id="node-004",
+            gpu_type="RTX4090",
+            vram_gb=24,
+            runtime="ollama",
+            model="custom-model:v1",
+            model_support=["custom-model:v1", "custom-model:v2"],
+            ask_price=0.30,
+            avg_latency=3500,
+            region="us-west",
+        )
         
-        assert "llama3-8b" in str(exc_info.value)
+        assert node.model == "custom-model:v1"
+        assert "custom-model:v2" in node.model_support
 
 
 class TestMatchModel:
-    """测试 Match Pydantic 模型"""
+    """
+    Test Match Pydantic Model
+    Match Pydantic 模型测试
+    """
     
     def test_match_creation(self):
-        """测试 Match 创建"""
+        """Test Match creation / 测试 Match 创建"""
         match = Match(
             job_id="job-001",
             node_id="node-001",
@@ -146,22 +187,29 @@ class TestMatchModel:
         assert match.settled is False
     
     def test_match_price_locked(self):
-        """测试 Match 价格锁定"""
+        """
+        Test Match price is locked
+        测试 Match 价格锁定
+        """
         match = Match(
             job_id="job-001",
             node_id="node-001",
             locked_price=0.30,
         )
         
-        # 价格锁定后不应变化
+        # Price should not change after locking
+        # 锁定后价格不应变化
         assert match.locked_price == 0.30
 
 
 class TestEscrowModel:
-    """测试 Escrow Pydantic 模型"""
+    """
+    Test Escrow Pydantic Model
+    Escrow Pydantic 模型测试
+    """
     
     def test_escrow_creation(self):
-        """测试 Escrow 创建"""
+        """Test Escrow creation / 测试 Escrow 创建"""
         escrow = Escrow(
             job_id="job-001",
             locked_amount=0.0012,
@@ -173,7 +221,10 @@ class TestEscrowModel:
         assert escrow.spent_amount == 0.0
     
     def test_escrow_settled(self):
-        """测试 Escrow 已结算状态"""
+        """
+        Test Escrow settled status
+        测试 Escrow 已结算状态
+        """
         escrow = Escrow(
             job_id="job-001",
             locked_amount=0.0012,
@@ -188,10 +239,13 @@ class TestEscrowModel:
 
 
 class TestJobDBModel:
-    """测试 Job 数据库模型"""
+    """
+    Test Job Database Model
+    Job 数据库模型测试
+    """
     
     def test_job_db_create(self, db_session):
-        """测试数据库中创建 Job"""
+        """Test creating Job in database / 测试在数据库中创建 Job"""
         job = JobDB(
             job_id="db-job-001",
             model="llama3-8b",
@@ -204,7 +258,7 @@ class TestJobDBModel:
         db_session.add(job)
         db_session.commit()
         
-        # 查询验证
+        # Query verification / 查询验证
         retrieved = db_session.query(JobDB).filter(
             JobDB.job_id == "db-job-001"
         ).first()
@@ -215,16 +269,21 @@ class TestJobDBModel:
 
 
 class TestNodeDBModel:
-    """测试 Node 数据库模型"""
+    """
+    Test Node Database Model (v3.1 - New: runtime and model)
+    Node 数据库模型测试（v3.1 - 新增：runtime 和 model）
+    """
     
     def test_node_db_create(self, db_session):
-        """测试数据库中创建 Node"""
+        """Test creating Node in database / 测试在数据库中创建 Node"""
         import json
         
         node = NodeDB(
             node_id="db-node-001",
             gpu_type="RTX4090",
             vram_gb=24,
+            runtime="ollama",
+            model="llama3-8b",
             model_support=json.dumps(["llama3-8b"]),
             ask_price=0.30,
             avg_latency=3500,
@@ -234,11 +293,13 @@ class TestNodeDBModel:
         db_session.add(node)
         db_session.commit()
         
-        # 查询验证
+        # Query verification / 查询验证
         retrieved = db_session.query(NodeDB).filter(
             NodeDB.node_id == "db-node-001"
         ).first()
         
         assert retrieved is not None
         assert retrieved.gpu_type == "RTX4090"
+        assert retrieved.runtime == "ollama"
+        assert retrieved.model == "llama3-8b"
         assert json.loads(retrieved.model_support) == ["llama3-8b"]

@@ -7,11 +7,25 @@ import pytest
 from datetime import datetime, timedelta
 
 from src.models import Job, JobStatus, Slot, SlotStatus, LockType, JobSet
-from src.models.slot import ModelInfo, PricingInfo, PerformanceInfo, CapacityInfo
+from src.models.cluster import ModelInfo, PricingInfo, PerformanceInfo, CapacityInfo
 from src.services.order_book import OrderBook
 from src.services.hard_filter import HardFilter, create_default_filter
 from src.services.scoring import ScoringFunction, scoring_function, ScoreBreakdown
 from src.services.pre_lock import PreLockService, PreLockStatus, pre_lock_service
+from src.services.node_status_store import node_status_store
+
+
+def setup_node_status(node_id: str, available_concurrency: int = 4, available_queue_tokens: int = 3000):
+    """Setup mock Node status for tests"""
+    node_status_store.update(node_id, {
+        "timestamp": 1713000000000,
+        "status": {"vram_used_gb": 18, "vram_total_gb": 48},
+        "capacity": {"max_concurrency_available": available_concurrency},
+        "load": {
+            "active_jobs": 0,
+            "available_token_capacity": available_queue_tokens
+        }
+    })
 
 
 class TestOrderBook:
@@ -39,7 +53,7 @@ class TestOrderBook:
         book = OrderBook()
         
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             model=ModelInfo(family="qwen", name="qwen3-8b"),
@@ -56,7 +70,7 @@ class TestOrderBook:
         book = OrderBook()
         
         book.add_slot(Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             model=ModelInfo(family="qwen", name="qwen3-8b"),
@@ -65,7 +79,7 @@ class TestOrderBook:
         ))
         
         book.add_slot(Slot(
-            slot_id="slot_002",
+            cluster_id="slot_002",
             node_id="node_001",
             worker_id="worker_002",
             model=ModelInfo(family="llama", name="llama3-8b"),
@@ -101,7 +115,7 @@ class TestOrderBook:
         book = OrderBook()
         
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             model=ModelInfo(family="qwen", name="qwen3-8b"),
@@ -123,8 +137,11 @@ class TestHardFilter:
         """基础过滤"""
         hf = HardFilter()
         
+        # Setup mock Node status
+        setup_node_status("slot_001", available_concurrency=4, available_queue_tokens=3000)
+        
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             model=ModelInfo(family="qwen", name="qwen3-8b"),
@@ -150,8 +167,10 @@ class TestHardFilter:
         """模型完全不兼容（家族不同但可能被接受）"""
         hf = HardFilter()
         
+        setup_node_status("slot_001")
+        
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             model=ModelInfo(family="qwen", name="qwen3-8b"),
@@ -159,7 +178,7 @@ class TestHardFilter:
             performance=PerformanceInfo(avg_latency_ms=100),
         )
         
-        # 跨家族模型 (CROSS_FAMILY = 0.3, Hard Filter 通过)
+        # 跨家族模型
         job = Job(
             job_id="job_001",
             model_requirement="gpt4",
@@ -171,24 +190,27 @@ class TestHardFilter:
         
         passed, reason = hf.filter(slot, job)
         
-        # Cross-family 通过 Hard Filter（但 Scoring 会降低分数）
-        assert passed == True
+        # Cross-family 应该失败
+        assert passed == False
+        assert reason == "model_not_supported"
     
     def test_latency_too_high(self):
         """延迟过高"""
         hf = HardFilter()
         
-        # 创建高延迟 Slot
-        slot_slow = Slot(
-            slot_id="slot_001",
+        # Setup mock Node status
+        setup_node_status("slot_002")
+        
+        # 使用 slot 延迟超过 job 的 max_latency
+        slot_very_slow = Slot(
+            cluster_id="slot_002",
             node_id="node_001",
-            worker_id="worker_001",
+            worker_id="worker_002",
             model=ModelInfo(family="qwen", name="qwen3-8b"),
             pricing=PricingInfo(input_price=0.0002, output_price=0.0004),
-            performance=PerformanceInfo(avg_latency_ms=500),  # 500ms 延迟
+            performance=PerformanceInfo(avg_latency_ms=1500),  # 1500ms 延迟
         )
         
-        # 创建需要低延迟的 Job (max_latency >= 1000 最小值)
         job = Job(
             job_id="job_001",
             model_requirement="qwen3-8b",
@@ -196,22 +218,6 @@ class TestHardFilter:
             output_tokens_limit=100,
             max_latency=1000,  # 1000ms
             bid_price=0.5,
-        )
-        
-        passed, reason = hf.filter(slot_slow, job)
-        
-        # slot 延迟 500ms，job 要求 1000ms，应该通过
-        # 这个测试无法演示 latency_too_high，因为 Job 最小值是 1000ms
-        # 所以我们测试一个边界情况
-        
-        # 使用 slot 延迟超过 job 的 max_latency
-        slot_very_slow = Slot(
-            slot_id="slot_002",
-            node_id="node_001",
-            worker_id="worker_002",
-            model=ModelInfo(family="qwen", name="qwen3-8b"),
-            pricing=PricingInfo(input_price=0.0002, output_price=0.0004),
-            performance=PerformanceInfo(avg_latency_ms=1500),  # 1500ms 延迟
         )
         
         passed, reason = hf.filter(slot_very_slow, job)
@@ -224,8 +230,10 @@ class TestHardFilter:
         """价格过高"""
         hf = HardFilter()
         
+        setup_node_status("slot_001")
+        
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             model=ModelInfo(family="qwen", name="qwen3-8b"),
@@ -251,9 +259,13 @@ class TestHardFilter:
         """批量过滤"""
         hf = HardFilter()
         
+        # Setup mock Node status for all slots
+        for i in range(5):
+            setup_node_status(f"slot_{i:03d}")
+        
         slots = [
             Slot(
-                slot_id=f"slot_{i:03d}",
+                cluster_id=f"slot_{i:03d}",
                 node_id="node_001",
                 worker_id=f"worker_{i:03d}",
                 model=ModelInfo(family="qwen", name="qwen3-8b"),
@@ -285,7 +297,7 @@ class TestScoringFunction:
         sf = ScoringFunction()
         
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=1, current_load=0),
@@ -313,7 +325,7 @@ class TestScoringFunction:
         sf = ScoringFunction()
         
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=1, current_load=0),
@@ -340,7 +352,7 @@ class TestScoringFunction:
         sf = ScoringFunction()
         
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4, current_load=1),  # 有负载
@@ -367,7 +379,7 @@ class TestScoringFunction:
         sf = ScoringFunction()
         
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=1, current_load=0),
@@ -395,7 +407,7 @@ class TestScoringFunction:
         
         # 两个不同的 Slot
         slot1 = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=1, current_load=0),
@@ -405,7 +417,7 @@ class TestScoringFunction:
         )
         
         slot2 = Slot(
-            slot_id="slot_002",
+            cluster_id="slot_002",
             node_id="node_002",
             worker_id="worker_002",
             capacity=CapacityInfo(max_concurrency=1, current_load=0),
@@ -435,7 +447,7 @@ class TestSlotLifecycle:
     def test_reserve_free_to_reserved(self):
         """FREE → RESERVED 转换"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),  # 使用更高的并发
@@ -454,7 +466,7 @@ class TestSlotLifecycle:
     def test_start_running(self):
         """开始运行"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=1),
@@ -474,7 +486,7 @@ class TestSlotLifecycle:
     def test_release(self):
         """释放"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=1),
@@ -495,7 +507,7 @@ class TestSlotLifecycle:
     def test_reset_to_free(self):
         """重置到 FREE"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=1),
@@ -513,7 +525,7 @@ class TestSlotLifecycle:
     def test_concurrent_capacity(self):
         """测试容量限制"""
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=1),
@@ -538,7 +550,7 @@ class TestPreLockService:
         service = PreLockService(default_ttl_ms=5000)
         
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -557,7 +569,7 @@ class TestPreLockService:
         service = PreLockService(default_ttl_ms=5000)
         
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
             capacity=CapacityInfo(max_concurrency=4),
@@ -580,14 +592,30 @@ class TestPhase2Integration:
     def test_full_match_engine_flow(self):
         """完整 Match Engine 流程"""
         from src.services.match_engine_v2 import MatchEngineV2
+        from src.models.node import Node, NodeState
         
         engine = MatchEngineV2()
         
-        # 注册 Slot
+        # 注册 Node (DCM v3.2)
+        node = Node(
+            node_id="node_001",
+            user_id="user_001",
+            location={"region": "us-west", "hostname": "node-001"},
+            hardware={"gpu_type": "RTX4090", "gpu_count": 1, "vram_per_gpu_gb": 24},
+            runtime={"type": "ollama", "loaded_models": ["qwen3-8b"]},
+            pricing={"ask_price_usdc_per_mtoken": 0.5},
+        )
+        engine.register_node(node)
+        
+        # 设置 Node 状态 (DCM v3.2 使用 node_id)
+        setup_node_status("node_001", available_concurrency=4, available_queue_tokens=3000)
+        
+        # 注册 Cluster (关联到 Node)
         slot = Slot(
-            slot_id="slot_001",
+            cluster_id="slot_001",
             node_id="node_001",
             worker_id="worker_001",
+            node_ids=["node_001"],  # DCM v3.2
             capacity=CapacityInfo(max_concurrency=4),
             model=ModelInfo(family="qwen", name="qwen3-8b"),
             pricing=PricingInfo(input_price=0.0002, output_price=0.0004),
@@ -606,12 +634,11 @@ class TestPhase2Integration:
         )
         engine.submit_job(job)
         
-        # 匹配（使用 Pre-Lock）
+        # 匹配
         result = engine.match_job(job.job_id)
         
         assert result.success == True
-        assert result.pre_locked == True
-        assert result.slot is not None
+        assert result.cluster is not None
         
         # 分发
         dispatch_result = engine.dispatch_job(job.job_id)

@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 from collections import defaultdict
 import time
 
-from ..models.slot import Slot, SlotStatus, ModelInfo
+from ..models.cluster import Cluster, ClusterStatus, ModelInfo
 from ..models.job import Job, JobStatus
 
 
@@ -18,7 +18,7 @@ class OrderBook:
     结构:
     {
         "qwen": {
-            "slots": [...],  # 可用 Slot 列表（按价格升序）
+            "clusters": [...],  # 可用 Cluster 列表（按价格升序）
             "jobs": [...],   # 待撮合 Job 列表（按价格降序）
         },
         "llama": {...},
@@ -27,13 +27,13 @@ class OrderBook:
     """
     
     def __init__(self):
-        # 按 family 分桶: family -> {slots: [], jobs: []}
+        # 按 family 分桶: family -> {clusters: [], jobs: []}
         self._buckets: Dict[str, Dict[str, List]] = defaultdict(lambda: {
-            "slots": [],   # Slot 列表
+            "clusters": [],   # Cluster 列表
             "jobs": [],    # Job 列表
         })
         # 全局桶（通用任务）
-        self._generic_bucket = {"slots": [], "jobs": []}
+        self._generic_bucket = {"clusters": [], "jobs": []}
     
     def _get_bucket_key(self, family: Optional[str]) -> str:
         """获取桶的 key"""
@@ -41,49 +41,95 @@ class OrderBook:
             return "*"
         return family.lower()
     
-    def add_slot(self, slot: Slot) -> None:
-        """添加 Slot 到 Order Book"""
-        family = slot.model.family.lower()  # 直接使用 family 字段
+    # ==================== Cluster 管理 ====================
+    
+    def add_cluster(self, cluster: Cluster) -> None:
+        """添加 Cluster 到 Order Book"""
+        family = cluster.model.family.lower()
         bucket = self._buckets[family]
         
         # 检查是否已存在
-        if any(s.slot_id == slot.slot_id for s in bucket["slots"]):
+        if any(c.cluster_id == cluster.cluster_id for c in bucket["clusters"]):
             return
         
         # 按价格升序插入（保持排序）
-        slots = bucket["slots"]
+        clusters = bucket["clusters"]
         inserted = False
-        for i, s in enumerate(slots):
-            if slot.pricing.output_price < s.pricing.output_price:
-                slots.insert(i, slot)
+        for i, c in enumerate(clusters):
+            if cluster.pricing.output_price < c.pricing.output_price:
+                clusters.insert(i, cluster)
                 inserted = True
                 break
         
         if not inserted:
-            slots.append(slot)
+            clusters.append(cluster)
         
-        # 通用桶也添加（通用任务可以匹配任何 slot）
-        if slot not in self._generic_bucket["slots"]:
-            self._generic_bucket["slots"].append(slot)
+        # 通用桶也添加（通用任务可以匹配任何 cluster）
+        if cluster not in self._generic_bucket["clusters"]:
+            self._generic_bucket["clusters"].append(cluster)
     
-    def remove_slot(self, slot_id: str) -> Optional[Slot]:
-        """从 Order Book 移除 Slot"""
+    # 别名兼容
+    def add_slot(self, cluster: Cluster) -> None:
+        """添加 Slot 到 Order Book (兼容别名)"""
+        return self.add_cluster(cluster)
+    
+    def remove_cluster(self, cluster_id: str) -> Optional[Cluster]:
+        """从 Order Book 移除 Cluster"""
         removed = None
         
         # 从各桶中移除
         for bucket in list(self._buckets.values()) + [self._generic_bucket]:
-            for i, s in enumerate(bucket["slots"]):
-                if s.slot_id == slot_id:
-                    removed = bucket["slots"].pop(i)
+            for i, c in enumerate(bucket["clusters"]):
+                if c.cluster_id == cluster_id:
+                    removed = bucket["clusters"].pop(i)
                     break
         
         return removed
     
-    def update_slot(self, slot: Slot) -> None:
-        """更新 Slot（状态变化后重新排序）"""
-        self.remove_slot(slot.slot_id)
-        if slot.status == SlotStatus.FREE:
-            self.add_slot(slot)
+    # 别名兼容
+    def remove_slot(self, cluster_id: str) -> Optional[Cluster]:
+        """从 Order Book 移除 Slot (兼容别名)"""
+        return self.remove_cluster(cluster_id)
+    
+    def update_cluster(self, cluster: Cluster) -> None:
+        """更新 Cluster（状态变化后重新排序）"""
+        self.remove_cluster(cluster.cluster_id)
+        if cluster.status == ClusterStatus.FREE:
+            self.add_cluster(cluster)
+    
+    # 别名兼容
+    def update_slot(self, cluster: Cluster) -> None:
+        """更新 Slot (兼容别名)"""
+        return self.update_cluster(cluster)
+    
+    def get_clusters(self, family: Optional[str] = None) -> List[Cluster]:
+        """获取指定 family 的 Clusters"""
+        if not family:
+            return list(self._generic_bucket["clusters"])
+        return list(self._buckets.get(family.lower(), {}).get("clusters", []))
+    
+    # 别名兼容
+    def get_slots(self, family: Optional[str] = None) -> List[Cluster]:
+        """获取指定 family 的 Slots (兼容别名)"""
+        return self.get_clusters(family)
+    
+    def get_all_clusters(self) -> List[Cluster]:
+        """获取所有 Clusters（去重）"""
+        seen = set()
+        result = []
+        for bucket in self._buckets.values():
+            for cluster in bucket["clusters"]:
+                if cluster.cluster_id not in seen:
+                    seen.add(cluster.cluster_id)
+                    result.append(cluster)
+        return result
+    
+    # 别名兼容
+    def get_all_slots(self) -> List[Cluster]:
+        """获取所有 Slots (兼容别名)"""
+        return self.get_all_clusters()
+    
+    # ==================== Job 管理 ====================
     
     def add_job(self, job: Job) -> None:
         """添加 Job 到 Order Book"""
@@ -130,28 +176,11 @@ class OrderBook:
         
         return removed
     
-    def get_slots(self, family: Optional[str] = None) -> List[Slot]:
-        """获取指定 family 的 Slots"""
-        if not family:
-            return list(self._generic_bucket["slots"])
-        return list(self._buckets.get(family.lower(), {}).get("slots", []))
-    
     def get_jobs(self, family: Optional[str] = None) -> List[Job]:
         """获取指定 family 的 Jobs"""
         if not family:
             return list(self._generic_bucket["jobs"])
         return list(self._buckets.get(family.lower(), {}).get("jobs", []))
-    
-    def get_all_slots(self) -> List[Slot]:
-        """获取所有 Slots（去重）"""
-        seen = set()
-        result = []
-        for bucket in self._buckets.values():
-            for slot in bucket["slots"]:
-                if slot.slot_id not in seen:
-                    seen.add(slot.slot_id)
-                    result.append(slot)
-        return result
     
     def get_all_jobs(self) -> List[Job]:
         """获取所有 Jobs（去重）"""
@@ -164,16 +193,18 @@ class OrderBook:
                     result.append(job)
         return result
     
+    # ==================== 统计 ====================
+    
     def get_bucket_stats(self) -> Dict[str, Dict[str, int]]:
         """获取各桶统计信息"""
         stats = {}
         for family, bucket in self._buckets.items():
             stats[family] = {
-                "slots_count": len(bucket["slots"]),
+                "clusters_count": len(bucket["clusters"]),
                 "jobs_count": len(bucket["jobs"]),
             }
         stats["*"] = {
-            "slots_count": len(self._generic_bucket["slots"]),
+            "clusters_count": len(self._generic_bucket["clusters"]),
             "jobs_count": len(self._generic_bucket["jobs"]),
         }
         return stats
@@ -181,4 +212,4 @@ class OrderBook:
     def clear(self) -> None:
         """清空 Order Book"""
         self._buckets.clear()
-        self._generic_bucket = {"slots": [], "jobs": []}
+        self._generic_bucket = {"clusters": [], "jobs": []}

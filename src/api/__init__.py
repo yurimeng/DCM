@@ -5,6 +5,7 @@ API Package
 
 from .jobs import router as jobs_router
 from .nodes import router as nodes_router
+from .users import router as users_router
 from .internal import router as internal_router
 from .disputes import router as disputes_router
 from .wallet import router as wallet_router
@@ -18,6 +19,7 @@ from .worker_pool import router as worker_pool_router
 __all__ = [
     "jobs_router",
     "nodes_router",
+    "users_router",
     "internal_router",
     "disputes_router",
     "wallet_router",

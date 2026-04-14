@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     
     # ===== 模型限制（MVP）=====
     mvp_model: str = "qwen2.5:7b"
-    max_output_tokens: int = 4096
+    max_output_tokens: int = 256
     max_latency_ms: int = 30000
     min_latency_ms: int = 1000
     
@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     # ===== 节点配置 =====
     heartbeat_timeout_seconds: int = 30
     max_retry_count: int = 2
+    
+    # ===== Node Status Store 配置 =====
+    # 可选值: "memory" 或 "redis"
+    node_status_store_backend: str = "memory"
+    node_status_store_ttl_seconds: int = 30
     
     # ===== Stake 分级 =====
     stake_personal: float = 50.0

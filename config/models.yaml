@@ -1,0 +1,210 @@
+# DCM Model Configuration
+# Dynamic model configuration for DCM v3.1
+
+model_families:
+  qwen:
+    display_name: "Qwen"
+    versions:
+      - "2.5"
+      - "3.0"
+      - "3.5"
+    sizes:
+      - "2b"
+      - "7b"
+      - "14b"
+      - "32b"
+      - "latest"
+    compatible_runtimes:
+      - ollama
+      - vllm
+    description: "Alibaba Qwen Series"
+
+  llama:
+    display_name: "Llama"
+    versions:
+      - "2"
+      - "3"
+      - "3.1"
+      - "3.2"
+    sizes:
+      - "8b"
+      - "70b"
+    compatible_runtimes:
+      - ollama
+      - vllm
+    description: "Meta Llama Series"
+
+  gemma:
+    display_name: "Gemma"
+    versions:
+      - "3"
+      - "4"
+    sizes:
+      - "e2b"
+      - "e4b"
+      - "e9b"
+      - "e12b"
+      - "e27b"
+    compatible_runtimes:
+      - ollama
+      - vllm
+    description: "Google Gemma Series"
+
+  mistral:
+    display_name: "Mistral"
+    versions:
+      - "7b"
+    sizes:
+      - "v0.1"
+      - "v0.2"
+      - "v0.3"
+    compatible_runtimes:
+      - ollama
+      - vllm
+    description: "Mistral AI Series"
+
+# Compatibility Matrix Configuration
+compatibility:
+  # Version order (ascending)
+  version_order:
+    ascending:
+      - "2.0"
+      - "2.5"
+      - "3.0"
+      - "3.5"
+      - "4.0"
+
+  # Size order (ascending)
+  size_order:
+    ascending:
+      - "2b"
+      - "7b"
+      - "8b"
+      - "14b"
+      - "32b"
+      - "70b"
+    embedding:
+      - "e2b"
+      - "e4b"
+      - "e9b"
+      - "e12b"
+      - "e27b"
+
+  # Cross-family compatibility (optional)
+  cross_family_compatible:
+    enabled: false
+    pairs: []
+
+  # Model matching weights
+  # 模型匹配权重
+  scoring_weights:
+    exact_match: 1.0
+    family_match: 0.8
+    compatible: 0.6
+    cross_family: 0.3
+    invalid: 0.0
+
+# Scoring Configuration (Match Engine)
+# 评分配置（撮合引擎）
+scoring:
+  # Scoring weights (must sum to 1.0)
+  # 评分权重（必须总和为 1.0）
+  weights:
+    price: 0.30          # Price score weight / 价格评分权重
+    latency: 0.25        # Latency score weight / 延迟评分权重
+    load: 0.15           # Load score weight / 负载评分权重
+    reputation: 0.15     # Reputation score weight / 信誉评分权重
+    compatibility: 0.15  # Compatibility score weight / 兼容性评分权重
+  
+  # Score calculation mode
+  # 评分计算模式
+  mode: "weighted"  # "weighted" = weighted sum, "additive" = additive
+  
+  # Bonus/Penalty multipliers
+  # 奖励/惩罚倍数
+  bonuses:
+    exact_model_match: 1.0    # Exact model match bonus / 精确模型匹配奖励
+    low_latency: 1.0          # Low latency bonus / 低延迟奖励
+    high_success_rate: 1.0    # High success rate bonus / 高成功率奖励
+  
+  penalties:
+    high_latency: 0.5         # High latency penalty / 高延迟惩罚
+    low_capacity: 0.8         # Low capacity penalty / 低容量惩罚
+
+# Default Configuration
+defaults:
+  node_agent:
+    default_model: null
+    default_runtime: null
+    fallback_model: "qwen2.5:7b"
+
+  match_engine:
+    allow_generic_jobs: true
+    default_family_bucket: "*"
+
+# Runtime Configuration
+runtimes:
+  ollama:
+    endpoint: "http://localhost:11434"
+    timeout: 60
+    api_format: "ollama"
+
+  vllm:
+    endpoint: "http://localhost:8000/v1"
+    timeout: 60
+    api_format: "openai"
+
+  tensorrt:
+    endpoint: "http://localhost:8000"
+    timeout: 120
+    api_format: "custom"
+
+  lmstudio:
+    endpoint: "http://localhost:1234/v1"
+    timeout: 60
+    api_format: "openai"
+
+# Settlement Configuration
+settlement:
+  # Fee distribution
+  platform_fee_rate: 0.05
+  node_earn_rate: 0.95
+  
+  # Escrow configuration
+  escrow:
+    buffer_multiplier: 1.1
+    min_bid_price: 0.0001
+    # Auto-complete delay in seconds after job completion
+    # Job 完成后自动完成的延迟秒数
+    auto_complete_seconds: 60
+    # Allow cancellation before auto-complete
+    # 允许在自动完成前取消
+    allow_cancellation: true
+  
+  # Settlement parameters
+  layer2_sample_rate: 0.1
+  latency_threshold_good: 5000
+  latency_threshold_mild: 10000
+  similarity_threshold_high: 0.85
+  similarity_threshold_low: 0.65
+
+# Stake Configuration
+stake:
+  personal: 50.0
+  professional: 200.0
+  enterprise: 1000.0
+
+# Job Queue Configuration
+# Job Queue 与 Match Engine 解耦
+# in_memory: true  → 使用 InMemoryQueue (MVP，单实例)
+# in_memory: false → 使用 Redis Queue (分布式)
+queue:
+  in_memory: true   # InMemoryQueue (默认)
+  max_size: 10000
+  
+  # Redis settings (当 in_memory=false 时使用)
+  redis:
+    host: localhost
+    port: 6379
+    db: 0
+    password: null

@@ -12,6 +12,7 @@ from sqlalchemy import desc, asc
 from .models import (
     JobDB, NodeDB, MatchDB, EscrowDB,
     StakeRecordDB, DisputeDB, AppealDB,
+    UserDB, UserSessionDB,
     JobStatusDB, NodeStatusDB, EscrowStatusDB
 )
 from .models.job import Job, JobStatus
@@ -118,11 +119,23 @@ class NodeRepository:
         self.db = db
     
     def create(self, node: Node) -> NodeDB:
-        """创建 Node"""
+        """Create Node / 创建 Node"""
         db_node = NodeDB(
             node_id=node.node_id,
             gpu_type=node.gpu_type,
             vram_gb=node.vram_gb,
+            gpu_count=node.gpu_count,
+            # GPU Details / GPU 详细信息
+            gpu_qty=getattr(node, 'gpu_qty', node.gpu_count),
+            gpu_vram_gb=getattr(node, 'gpu_vram_gb', node.vram_gb),
+            gpu_pooled=getattr(node, 'gpu_pooled', False),
+            # OS Info / 操作系统信息
+            os_name=getattr(node, 'os_name', ''),
+            os_version=getattr(node, 'os_version', ''),
+            hostname=getattr(node, 'hostname', ''),
+            # Required: runtime and model / 必填：runtime 和 model
+            runtime=node.runtime,
+            model=node.model,
             model_support=json.dumps(node.model_support),
             ask_price=node.ask_price,
             avg_latency=node.avg_latency,
@@ -334,4 +347,421 @@ class EscrowRepository:
             platform_fee=db_escrow.platform_fee,
             node_earn=db_escrow.node_earn,
             refund_reason=db_escrow.refund_reason,
+        )
+
+
+# ==================== User Repository / 用户仓储 ====================
+
+class UserRepository:
+    """
+    User Data Access
+    用户数据访问
+    
+    Supports:
+    - Create user with multiple auth providers
+    - Find user by email, oauth_id, or user_id
+    - Bind/unbind node
+    - Update reputation
+    - Validate user status (disabled check)
+    """
+    
+    def __init__(self, db: Session):
+        self.db = db
+    
+    @staticmethod
+    def is_valid_uuid(user_id: str) -> bool:
+        """
+        Validate UUID format
+        验证 UUID 格式
+        """
+        import re
+        uuid_pattern = re.compile(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+            re.IGNORECASE
+        )
+        return bool(uuid_pattern.match(user_id))
+    
+    def validate_user_id(self, user_id: str) -> tuple[bool, Optional[UserDB], str]:
+        """
+        Validate user ID and check status
+        验证用户 ID 并检查状态
+        
+        Returns:
+            (is_valid, user_db, error_message)
+        """
+        # Check UUID format
+        if not self.is_valid_uuid(user_id):
+            return False, None, "Invalid user ID format"
+        
+        # Check if user exists
+        user = self.get(user_id)
+        if not user:
+            return False, None, "User not found"
+        
+        # Check if user is disabled
+        if user.status == "disabled":
+            return False, None, "User is disabled"
+        
+        # Check if user is deleted
+        if user.status == "deleted":
+            return False, None, "User account deleted"
+        
+        # Check if user is suspended
+        if user.status == "suspended":
+            return False, None, "User account suspended"
+        
+        return True, user, ""
+    
+    def create(self, user) -> UserDB:
+        """
+        Create new user
+        创建新用户
+        """
+        db_user = UserDB(
+            user_id=user.user_id,
+            auth_provider=user.auth_provider.value,
+            oauth_id=user.oauth_id,
+            oauth_email=user.oauth_email,
+            email=user.email,
+            password_hash=user.password_hash,
+            username=user.username,
+            avatar_url=user.avatar_url,
+            role=user.role.value,
+            status=user.status.value,
+            node_ids=json.dumps(user.node_ids) if user.node_ids else "[]",
+            bound_at=user.bound_at,
+            wallet_address=user.wallet_address,
+            wallet_type=user.wallet_type,
+            wallet_verified=user.wallet_verified,
+            reputation_score=user.reputation_score,
+            total_jobs=user.total_jobs,
+            successful_jobs=user.successful_jobs,
+            failed_jobs=user.failed_jobs,
+            created_at=user.created_at,
+            last_login=user.last_login,
+            login_count=user.login_count,
+            user_metadata=json.dumps(user.metadata) if user.metadata else None,
+        )
+        self.db.add(db_user)
+        self.db.commit()
+        self.db.refresh(db_user)
+        return db_user
+    
+    def get(self, user_id: str) -> Optional[UserDB]:
+        """
+        Get user by ID
+        根据 ID 获取用户
+        """
+        return self.db.query(UserDB).filter(UserDB.user_id == user_id).first()
+    
+    def get_by_email(self, email: str) -> Optional[UserDB]:
+        """
+        Get user by email
+        根据邮箱获取用户
+        """
+        return self.db.query(UserDB).filter(UserDB.email == email.lower()).first()
+    
+    def get_by_oauth(self, provider: str, oauth_id: str) -> Optional[UserDB]:
+        """
+        Get user by OAuth provider and ID
+        根据 OAuth 提供商和 ID 获取用户
+        """
+        return self.db.query(UserDB).filter(
+            UserDB.auth_provider == provider,
+            UserDB.oauth_id == oauth_id
+        ).first()
+    
+    def get_by_username(self, username: str) -> Optional[UserDB]:
+        """
+        Get user by username
+        根据用户名获取用户
+        """
+        return self.db.query(UserDB).filter(UserDB.username == username).first()
+    
+    def get_by_node(self, node_id: str) -> Optional[UserDB]:
+        """
+        Get user bound to node
+        获取绑定到节点的用户
+        """
+        return self.db.query(UserDB).filter(UserDB.node_id == node_id).first()
+    
+    def get_by_wallet(self, wallet_address: str) -> Optional[UserDB]:
+        """
+        Get user by wallet address
+        根据钱包地址获取用户
+        """
+        return self.db.query(UserDB).filter(UserDB.wallet_address == wallet_address).first()
+    
+    def bind_wallet(
+        self,
+        user_id: str,
+        wallet_address: str,
+        wallet_type: str = "evm"
+    ) -> Optional[UserDB]:
+        """
+        Bind wallet to user
+        绑定钱包到用户
+        """
+        user = self.get(user_id)
+        if not user:
+            return None
+        
+        # Check if wallet is already bound to another user
+        existing = self.get_by_wallet(wallet_address)
+        if existing and existing.user_id != user_id:
+            return None
+        
+        user.wallet_address = wallet_address
+        user.wallet_type = wallet_type
+        user.wallet_verified = False
+        
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+    
+    def verify_wallet(self, user_id: str) -> Optional[UserDB]:
+        """
+        Verify wallet for user
+        验证用户钱包
+        """
+        user = self.get(user_id)
+        if not user or not user.wallet_address:
+            return None
+        
+        user.wallet_verified = True
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+    
+    def unbind_wallet(self, user_id: str) -> Optional[UserDB]:
+        """
+        Unbind wallet from user
+        解绑钱包
+        """
+        user = self.get(user_id)
+        if not user:
+            return None
+        
+        user.wallet_address = None
+        user.wallet_type = None
+        user.wallet_verified = False
+        
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+    
+    def add_node_to_user(self, user_id: str, node_id: str) -> Optional[UserDB]:
+        """
+        Add node to user's node_ids list
+        添加节点到用户的 node_ids 列表（系统自动维护）
+        """
+        user = self.get(user_id)
+        if not user:
+            return None
+        
+        # Parse existing node_ids
+        node_ids = json.loads(user.node_ids or "[]")
+        
+        # Add if not exists
+        if node_id not in node_ids:
+            node_ids.append(node_id)
+            user.node_ids = json.dumps(node_ids)
+            user.bound_at = datetime.utcnow()
+            self.db.commit()
+            self.db.refresh(user)
+        
+        return user
+    
+    def remove_node_from_user(self, user_id: str, node_id: str) -> Optional[UserDB]:
+        """
+        Remove node from user's node_ids list
+        从用户的 node_ids 列表移除节点（系统自动维护）
+        """
+        user = self.get(user_id)
+        if not user:
+            return None
+        
+        # Parse existing node_ids
+        node_ids = json.loads(user.node_ids or "[]")
+        
+        # Remove if exists
+        if node_id in node_ids:
+            node_ids.remove(node_id)
+            user.node_ids = json.dumps(node_ids)
+            self.db.commit()
+            self.db.refresh(user)
+        
+        return user
+    
+    def get_by_node(self, node_id: str) -> Optional[UserDB]:
+        """
+        Get user bound to node (search in node_ids list)
+        获取绑定到节点的用户
+        """
+        users = self.db.query(UserDB).all()
+        for user in users:
+            node_ids = json.loads(user.node_ids or "[]")
+            if node_id in node_ids:
+                return user
+        return None
+    
+    def update(self, user_id: str, **kwargs) -> Optional[UserDB]:
+        """
+        Update user
+        更新用户
+        """
+        user = self.get(user_id)
+        if not user:
+            return None
+        
+        for key, value in kwargs.items():
+            if hasattr(user, key) and value is not None:
+                setattr(user, key, value)
+        
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+    
+    def update_reputation(
+        self,
+        user_id: str,
+        success: bool
+    ) -> Optional[UserDB]:
+        """
+        Update user reputation based on job result
+        根据 Job 结果更新用户声誉
+        """
+        user = self.get(user_id)
+        if not user:
+            return None
+        
+        # Update job stats
+        user.total_jobs += 1
+        if success:
+            user.successful_jobs += 1
+            # Success bonus
+            bonus = 0.01 * (1 - user.reputation_score)
+            user.reputation_score = min(1.0, user.reputation_score + bonus)
+        else:
+            user.failed_jobs += 1
+            # Failure penalty
+            user.reputation_score = max(0.0, user.reputation_score - 0.02)
+        
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+    
+    def bind_node(self, user_id: str, node_id: str) -> Optional[UserDB]:
+        """
+        Bind user to node
+        绑定用户到节点
+        """
+        user = self.get(user_id)
+        if not user:
+            return None
+        
+        if user.node_id and user.node_id != node_id:
+            # Already bound to another node
+            return None
+        
+        user.node_id = node_id
+        user.bound_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+    
+    def unbind_node(self, user_id: str) -> Optional[UserDB]:
+        """
+        Unbind user from node
+        解绑节点
+        """
+        user = self.get(user_id)
+        if not user:
+            return None
+        
+        user.node_id = None
+        user.bound_at = None
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+    
+    def update_login(self, user_id: str) -> Optional[UserDB]:
+        """
+        Update login stats
+        更新登录统计
+        """
+        user = self.get(user_id)
+        if not user:
+            return None
+        
+        user.last_login = datetime.utcnow()
+        user.login_count += 1
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+    
+    def list_users(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+        status: str = None
+    ) -> List[UserDB]:
+        """
+        List users with pagination
+        分页列出用户
+        """
+        query = self.db.query(UserDB)
+        
+        if status:
+            query = query.filter(UserDB.status == status)
+        
+        return query.order_by(desc(UserDB.created_at)).offset(skip).limit(limit).all()
+    
+    def delete(self, user_id: str) -> bool:
+        """
+        Soft delete user
+        软删除用户
+        """
+        user = self.get(user_id)
+        if not user:
+            return False
+        
+        user.status = "deleted"
+        self.db.commit()
+        return True
+    
+    def to_model(self, db_user: UserDB) -> 'User':
+        """
+        Convert DB model to Pydantic model
+        转换数据库模型为 Pydantic 模型
+        """
+        from .models.user import (
+            User, UserStatus as UserStatusEnum,
+            UserRole as UserRoleEnum, AuthProvider as AuthProviderEnum
+        )
+        
+        return User(
+            user_id=db_user.user_id,
+            auth_provider=AuthProviderEnum(db_user.auth_provider),
+            oauth_id=db_user.oauth_id,
+            oauth_email=db_user.oauth_email,
+            email=db_user.email,
+            password_hash=db_user.password_hash,
+            username=db_user.username,
+            avatar_url=db_user.avatar_url,
+            role=UserRoleEnum(db_user.role),
+            status=UserStatusEnum(db_user.status),
+            node_ids=json.loads(db_user.node_ids) if db_user.node_ids else [],
+            bound_at=db_user.bound_at,
+            wallet_address=db_user.wallet_address,
+            wallet_type=db_user.wallet_type,
+            wallet_verified=db_user.wallet_verified,
+            reputation_score=db_user.reputation_score,
+            total_jobs=db_user.total_jobs,
+            successful_jobs=db_user.successful_jobs,
+            failed_jobs=db_user.failed_jobs,
+            created_at=db_user.created_at,
+            last_login=db_user.last_login,
+            login_count=db_user.login_count,
+            metadata=json.loads(db_user.user_metadata) if db_user.user_metadata else {},
         )
