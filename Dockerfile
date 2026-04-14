@@ -6,8 +6,20 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制所有代码
-COPY . .
+# 复制所有代码（排除 .git）
+COPY src ./src
+COPY config.py .
+COPY config ./config
+COPY tests ./tests
+COPY Function ./Function
+COPY contracts ./contracts
+COPY docs ./docs
+COPY scripts ./scripts
+
+# 不复制这些大文件
+# - .git (历史记录，100MB+)
+# - dcm.db (本地数据库)
+# - htmlcov/ (测试覆盖率报告)
 
 FROM python:3.11-slim
 WORKDIR /app
@@ -18,6 +30,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/config.py .
+COPY --from=builder /app/config ./config
 
 # 创建数据目录
 RUN mkdir -p /app/data
