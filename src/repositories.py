@@ -148,7 +148,7 @@ class NodeRepository:
             os_version=getattr(node, 'os_version', ''),
             hostname=getattr(node, 'hostname', ''),
             # Required: runtime and model / 必填：runtime 和 model
-            runtime=node.runtime,
+            runtime=json.dumps(node.runtime.model_dump() if hasattr(node.runtime, 'model_dump') else str(node.runtime)),
             model=node.runtime.loaded_models[0] if node.runtime.loaded_models else '',
             model_support=json.dumps(node.runtime.loaded_models),
             ask_price=ask_price,
@@ -157,7 +157,7 @@ class NodeRepository:
             status=NodeStatusDB.ONLINE,  # Default to ONLINE
             stake_amount=node.economy.stake_amount,
             stake_required=node.economy.stake_required,
-            stake_tier=node.economy.stake_tier.value,
+            stake_tier=node.economy.stake_tier,
         )
         self.db.add(db_node)
         self.db.commit()
