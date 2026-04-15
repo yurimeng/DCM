@@ -1136,3 +1136,74 @@ async def debug_test_status_store(
         result["get_trace"] = traceback.format_exc()
     
     return result
+
+@router.post("/debug/test-node-login-full")
+async def debug_test_node_login_full(
+    node_id: str,
+    user_id: str,
+    db: Session = Depends(get_db)
+):
+    """完整测试 node_login 的每个步骤"""
+    import traceback
+    import time
+    
+    steps = []
+    
+    # Step 1: Validate user
+    try:
+        from ..repositories import UserRepository
+        user_repo = UserRepository(db)
+        is_valid, user_db, error_msg = user_repo.validate_user_id(user_id)
+        steps.append({
+            "step": 1,
+            "name": "validate_user",
+            "success": is_valid,
+            "error": error_msg
+        })
+    except Exception as e:
+        steps.append({"step": 1, "name": "validate_user", "success": False, "error": str(e), "trace": traceback.format_exc()})
+        return {"steps": steps}
+    
+    # Step 2: Get node
+    try:
+        from ..repositories import NodeRepository
+        node_repo = NodeRepository(db)
+        db_node = node_repo.get(node_id)
+        steps.append({
+            "step": 2,
+            "name": "get_node",
+            "success": db_node is not None,
+            "node_found": db_node is not None,
+            "node_user_id": db_node.user_id if db_node else None
+        })
+    except Exception as e:
+        steps.append({"step": 2, "name": "get_node", "success": False, "error": str(e), "trace": traceback.format_exc()})
+        return {"steps": steps}
+    
+    # Step 3: Check user match
+    try:
+        user_match = db_node.user_id == user_id
+        steps.append({
+            "step": 3,
+            "name": "check_user_match",
+            "success": user_match,
+            "db_node_user_id": db_node.user_id,
+            "input_user_id": user_id
+        })
+    except Exception as e:
+        steps.append({"step": 3, "name": "check_user_match", "success": False, "error": str(e), "trace": traceback.format_exc()})
+        return {"steps": steps}
+    
+    # Step 4: Build return value
+    try:
+        result = {
+            "node_id": node_id,
+            "status": "ok",
+            "cluster_id": db_node.cluster_id,
+            "timestamp": int(time.time() * 1000),
+        }
+        steps.append({"step": 4, "name": "build_return", "success": True, "result": result})
+        return {"steps": steps, "final_result": result}
+    except Exception as e:
+        steps.append({"step": 4, "name": "build_return", "success": False, "error": str(e), "trace": traceback.format_exc()})
+        return {"steps": steps}
