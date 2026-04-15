@@ -306,6 +306,7 @@ class NodeResponse(BaseModel):
     slot_count: int = 0
     worker_count: int = 0
     next_step: Optional[str] = None
+    cluster_id: Optional[str] = Field(None, description="分配的 Cluster ID")
 
 
 class NodePollResponse(BaseModel):

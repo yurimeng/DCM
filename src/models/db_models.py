@@ -126,6 +126,9 @@ class NodeDB(Base):
     # 用户绑定（注册时从 NodeCreate.user_id 获取）
     user_id = Column(String(36), nullable=True, index=True)
     
+    # Cluster 绑定
+    cluster_id = Column(String(50), nullable=True, index=True)
+    
     # 关联
     stake_record = relationship("StakeRecordDB", back_populates="node", uselist=False)
     matches = relationship("MatchDB", back_populates="node")

@@ -160,6 +160,7 @@ class NodeRepository:
             stake_amount=node.economy.stake_amount,
             stake_required=node.economy.stake_required,
             stake_tier=node.economy.stake_tier,
+            cluster_id=getattr(node.network, 'cluster_id', None),  # Cluster 绑定
         )
         self.db.add(db_node)
         self.db.commit()
