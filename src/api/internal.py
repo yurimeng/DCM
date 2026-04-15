@@ -1073,16 +1073,28 @@ async def debug_node_login(
     
     # 3. Test return value
     try:
+        import time
         return_value = {
             "node_id": node_id,
             "status": "ok",
             "cluster_id": db_node.cluster_id,
-            "timestamp": 1234567890,
+            "timestamp": int(time.time() * 1000),
         }
         result["return_value"] = return_value
     except Exception as e:
         result["return_error"] = str(e)
         result["return_trace"] = traceback.format_exc()
+    
+    # 4. Simulate full node_login endpoint
+    try:
+        from ..api.nodes import node_login
+        import inspect
+        sig = inspect.signature(node_login)
+        result["node_login_sig"] = str(sig)
+        result["node_login_found"] = True
+    except Exception as e:
+        result["node_login_error"] = str(e)
+        result["node_login_trace"] = traceback.format_exc()
     
     return result
 

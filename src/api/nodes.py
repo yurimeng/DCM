@@ -144,13 +144,13 @@ async def node_login(
     
     Flow:
     1. 验证用户 + Node
-    2. 进行 status report
-    3. 检查 cluster_id 是否变化
-    4. 如果变化，更新并返回新 cluster_id
-    5. 否则返回 OK
+    2. 返回当前 cluster_id
     """
     import time
-    import traceback
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info(f"node_login: node_id={node_id}")
     
     user_id = login_data.get("user_id")
     if not user_id:
@@ -170,8 +170,9 @@ async def node_login(
     if db_node.user_id != user_id:
         raise HTTPException(status_code=403, detail="Node does not belong to user")
     
+    logger.info(f"node_login success: cluster_id={db_node.cluster_id}")
+    
     # Return current status
-    # Note: cluster_id will be generated/updated when Node sends live_status
     return {
         "node_id": node_id,
         "status": "ok",
