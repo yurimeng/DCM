@@ -260,9 +260,10 @@ class NodeAgent:
     # ===== Cluster 分配 =====
     
     def _init_node_info(self) -> Dict:
-        """初始化本地 Node 信息 (用于 Cluster 分配)"""
-        from src.services.cluster_builder import build_cluster_id
+        """初始化本地 Node 信息
         
+        注意: cluster_id 由 NodeStatusStore 生成，这里只记录本地信息
+        """
         # 构建初始 Node 信息
         self._node = {
             "node_id": self.node_id,
@@ -274,14 +275,8 @@ class NodeAgent:
             "success_rate": 0.95,
         }
         
-        # 生成初始 Cluster ID
-        self._current_cluster_id = build_cluster_id(
-            region=self._node["region"],
-            stake_tier=self._node["stake_tier"],
-            models=self._node["loaded_models"],
-            quality_score=self._node["quality_score"],
-            success_rate=self._node["success_rate"],
-        )
+        # cluster_id 由 NodeStatusStore 返回，Node 只做记录
+        self._current_cluster_id = None
         
         return self._node
     
@@ -289,43 +284,35 @@ class NodeAgent:
         """
         检查并更新 Cluster ID
         
-        在 Node Capacity Report 时调用
-        如果 loaded_models 变化则更新
+        流程:
+        1. Node 发送 capacity_report 到 API
+        2. NodeStatusStore 生成 cluster_id
+        3. API 返回 new_cluster_id 给 Node
+        4. Node 记录返回的 cluster_id
         
         Returns:
-            新的 cluster_id 或 None
+            None (cluster_id 由服务端生成)
         """
-        from src.services.cluster_builder import build_cluster_id
-        
+        # 更新本地 loaded_models
         if self._node is None:
             self._init_node_info()
         
-        # 获取最新的 loaded_models
         loaded_models = self._get_loaded_models()
         self._node["loaded_models"] = loaded_models
         
-        # 重新生成 Cluster ID
-        new_cluster_id = build_cluster_id(
-            region=self._node["region"],
-            stake_tier=self._node["stake_tier"],
-            models=loaded_models,
-            quality_score=self._node["quality_score"],
-            success_rate=self._node["success_rate"],
-        )
-        
-        if new_cluster_id != self._current_cluster_id:
-            old_cluster_id = self._current_cluster_id
-            self._current_cluster_id = new_cluster_id
-            logger.info(f"Cluster updated: {old_cluster_id} -> {new_cluster_id}")
-            return new_cluster_id
-        
+        # cluster_id 由 NodeStatusStore 返回，这里不做处理
         return None
     
     def get_current_cluster_id(self) -> Optional[str]:
         """获取当前 Cluster ID"""
-        if self._current_cluster_id is None:
-            self._init_node_info()
         return self._current_cluster_id
+    
+    def set_cluster_id(self, cluster_id: str) -> None:
+        """设置 Cluster ID (由 NodeStatusStore 返回)"""
+        if self._current_cluster_id != cluster_id:
+            old = self._current_cluster_id
+            self._current_cluster_id = cluster_id
+            logger.info(f"Cluster ID updated: {old} -> {cluster_id}")
     
     # ===== 连接管理 =====
     
@@ -543,7 +530,11 @@ class NodeAgent:
         
         频率: 30-60 秒
         
-        同时检查 Cluster ID 是否需要更新
+        流程:
+        1. 发送 capacity_report 到 API
+        2. API 调用 NodeStatusStore 生成 cluster_id
+        3. API 返回 new_cluster_id
+        4. Node 记录返回的 cluster_id
         """
         loaded_models = self._get_loaded_models()
         
@@ -568,13 +559,21 @@ class NodeAgent:
         if self.config.use_websocket:
             self._send_ws_message(report)
         else:
-            requests.post(
-                f"{self.config.router_url}/api/v1/nodes/{self.node_id}/capacity_report",
-                json=report,
-                timeout=5,
-            )
+            try:
+                resp = requests.post(
+                    f"{self.config.router_url}/api/v1/nodes/{self.node_id}/capacity_report",
+                    json=report,
+                    timeout=5,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    new_cluster_id = data.get("new_cluster_id")
+                    if new_cluster_id:
+                        self.set_cluster_id(new_cluster_id)
+            except Exception as e:
+                logger.warning(f"Failed to send capacity_report: {e}")
         
-        # 检查并更新 Cluster ID
+        # 更新本地 loaded_models
         self._check_and_update_cluster()
     
     # ===== GPU 监控 =====
