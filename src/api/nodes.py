@@ -132,73 +132,16 @@ async def node_login(
     node_id: str,
     db: Session = Depends(get_db)
 ):
-    """Node Login"""
-    import time
-    import logging
-    import json
-    logger = logging.getLogger(__name__)
+    """Node Login - Verify node exists"""
+    from ..repositories import NodeRepository
     
-    logger.info(f"node_login request: node_id={node_id}, login_data={json.dumps(login_data)}")
-    
-    # Step 1: 检查 login_data
-    if not login_data:
-        logger.error(f"node_login: empty login_data")
-        raise HTTPException(status_code=400, detail="login_data is required")
-    
-    user_id = login_data.get("user_id")
-    if not user_id:
-        logger.error(f"node_login: missing user_id in login_data")
-        raise HTTPException(status_code=400, detail="user_id is required in login_data")
-    
-    # Step 2: 验证用户
-    user_repo = UserRepository(db)
-    is_valid, user_db, error_msg = user_repo.validate_user_id(user_id)
-    if not is_valid:
-        logger.error(f"node_login: invalid user_id={user_id}, error={error_msg}")
-        raise HTTPException(status_code=403, detail=error_msg)
-    
-    # Step 3: 获取 Node (可能不存在!)
     node_repo = NodeRepository(db)
-    db_node = None
-    try:
-        db_node = node_repo.get(node_id)
-        logger.info(f"node_login: node query result={db_node is not None}")
-    except Exception as e:
-        logger.error(f"node_login: failed to get node {node_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    db_node = node_repo.get(node_id)
     
-    # Step 4: 检查 Node 是否存在
-    if db_node is None:
-        logger.error(f"node_login: node not found in DB: node_id={node_id}")
-        raise HTTPException(
-            status_code=404, 
-            detail=f"Node {node_id} not found. Please register first with POST /api/v1/nodes"
-        )
+    if not db_node:
+        return {"status": "Failed", "error": "Node not found"}
     
-    # Step 5: 检查用户匹配
-    try:
-        db_node_user = db_node.user_id
-        logger.info(f"node_login: db_node.user_id={db_node_user}, input user_id={user_id}")
-        if db_node_user != user_id:
-            logger.error(f"node_login: user mismatch")
-            raise HTTPException(status_code=403, detail="Node does not belong to user")
-    except Exception as e:
-        logger.error(f"node_login: failed to check user match: {e}")
-        raise HTTPException(status_code=500, detail=f"Error checking node ownership: {str(e)}")
-    
-    # Step 6: 构建返回
-    try:
-        result = {
-            "node_id": node_id,
-            "status": "ok",
-            "cluster_id": db_node.cluster_id,
-            "timestamp": int(time.time() * 1000),
-        }
-        logger.info(f"node_login success: returning {result}")
-        return result
-    except Exception as e:
-        logger.error(f"node_login: failed to build response: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to build response: {str(e)}")
+    return {"status": "OK"}
 
 
 @router.get("/debug/matching-status")
