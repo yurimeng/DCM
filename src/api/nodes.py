@@ -51,10 +51,8 @@ async def register_node(
     Flow:
     1. 验证用户
     2. 创建 Node 记录
-    3. 立即进行 status report
-    4. NodeStatusStore 更新状态
-    5. 动态生成 cluster_id
-    6. 返回 cluster_id 给 Node
+    3. 返回 node_id 给 Node
+    4. Node 上报 live_status 后，NodeStatusStore 生成 cluster_id
     """
     import time
     
@@ -93,80 +91,33 @@ async def register_node(
     node.economy.stake_tier = 'personal'
     node.state.status = 'online'
     
-    # 3. Save to DB (without cluster_id first)
+    # 3. Save to DB
     node_repo = NodeRepository(db)
     db_node = node_repo.create(node)
     
     # 4. Update user's node_ids
     user_repo.add_node_to_user(user_id, node.node_id)
     
-    # 5. Update NodeStatusStore (立即上报状态)
-    from ..services.node_status_store import update_node_status, get_node_info
-    current_time_ms = int(time.time() * 1000)
-    
-    live_status = {
-        "timestamp": current_time_ms,
-        "status": {
-            "state": "idle",
-            "vram_used_gb": 0,
-            "vram_total_gb": node.hardware.vram_per_gpu_gb or 80,
-        },
-        "capacity": {
-            "max_concurrency_available": node.capability.max_concurrency_total,
-            "max_concurrency_total": node.capability.max_concurrency_total,
-        },
-        "load": {
-            "active_jobs": 0,
-            "available_token_capacity": node.capability.max_queue_tokens,
-        },
-    }
-    update_node_status(node.node_id, live_status)
-    
-    # 6. Dynamic generate cluster_id based on NodeStatusStore
-    # 根据 NodeStatusStore 的状态动态生成 cluster_id
-    try:
-        from ..services.cluster_builder import build_cluster_id
-        
-        # Get model family from runtime
-        models = node.runtime.loaded_models if hasattr(node, 'runtime') and node.runtime else []
-        model_family = "unknown"
-        for m in models:
-            if "qwen" in m.lower():
-                model_family = "qwen"
-                break
-            elif "llama" in m.lower():
-                model_family = "llama"
-                break
-        
-        # Build cluster_id
-        cluster_id = build_cluster_id(
-            region=node.location.region if node.location else "unknown",
-            stake_tier=node.economy.stake_tier if node.economy else "personal",
-            models=models,
-            quality_score=node.reliability.quality_score if node.reliability else 0.9,
-            success_rate=node.reliability.success_rate if node.reliability else 0.95,
-        )
-        
-        # Update Node with cluster_id
-        node_repo.update(node.node_id, cluster_id=cluster_id)
-        
-        # Also update NodeStatusStore with cluster_id
-        live_status["cluster_id"] = cluster_id
-        update_node_status(node.node_id, live_status)
-        
-        logger.info(f"Node {node.node_id} registered with cluster_id: {cluster_id}")
-        
-    except Exception as e:
-        logger.error(f"Failed to build cluster_id: {e}")
-        cluster_id = None
-    
-    # 7. Update runtime info in NodeDB
+    # 5. Update runtime info in NodeDB
     node_repo.update(node.node_id, 
         runtime=json.dumps(node.runtime.model_dump()) if hasattr(node.runtime, 'model_dump') else '{}',
         model=node.runtime.loaded_models[0] if node.runtime.loaded_models else 'unknown'
     )
     
-    # 8. Return response with cluster_id
+    # 6. Return response - cluster_id will be assigned when Node sends live_status
+    return NodeResponse(
+        node_id=node.node_id,
+        user_id=user_id,
+        status=NodeStatus(_safe_status(db_node.status)),
+        stake_required=db_node.stake_required,
+        gpu_type=node.hardware.gpu_type,
+        gpu_count=node.hardware.gpu_count,
+        stake_amount=db_node.stake_amount,
+        slot_count=0,
+        worker_count=0,
+        next_step=f"Deposit {db_node.stake_required} USDC to activate",
+        cluster_id=None,  # Will be assigned when Node sends live_status
+    )
     return NodeResponse(
         node_id=node.node_id,
         user_id=user_id,
@@ -199,6 +150,7 @@ async def node_login(
     5. 否则返回 OK
     """
     import time
+    import traceback
     
     user_id = login_data.get("user_id")
     if not user_id:
@@ -218,74 +170,13 @@ async def node_login(
     if db_node.user_id != user_id:
         raise HTTPException(status_code=403, detail="Node does not belong to user")
     
-    # Update NodeStatusStore
-    from ..services.node_status_store import update_node_status, get_node_info
-    current_time_ms = int(time.time() * 1000)
-    
-    live_status = {
-        "timestamp": current_time_ms,
-        "status": {
-            "state": "idle",
-            "vram_used_gb": 0,
-            "vram_total_gb": db_node.gpu_vram_gb or 80,
-        },
-        "capacity": {
-            "max_concurrency_available": 1,
-            "max_concurrency_total": 1,
-        },
-        "load": {
-            "active_jobs": 0,
-            "available_token_capacity": 1500,
-        },
-    }
-    update_node_status(node_id, live_status)
-    
-    # Check if cluster_id needs update
-    old_cluster_id = db_node.cluster_id
-    new_cluster_id = None
-    
-    try:
-        from ..services.cluster_builder import build_cluster_id
-        import json
-        
-        runtime_data = json.loads(db_node.runtime) if isinstance(db_node.runtime, str) else {}
-        models = runtime_data.get('loaded_models', [])
-        
-        stake_tier = "personal"
-        if db_node.stake_tier:
-            if hasattr(db_node.stake_tier, 'value'):
-                stake_tier = db_node.stake_tier.value
-            elif isinstance(db_node.stake_tier, str):
-                stake_tier = db_node.stake_tier
-        
-        new_cluster_id = build_cluster_id(
-            region=db_node.region or "unknown",
-            stake_tier=stake_tier,
-            models=models,
-            quality_score=0.9,
-            success_rate=0.95,
-        )
-        
-        # Update if changed
-        if old_cluster_id != new_cluster_id:
-            node_repo.update(node_id, cluster_id=new_cluster_id)
-            logger.info(f"Node {node_id} cluster updated: {old_cluster_id} -> {new_cluster_id}")
-            
-            # Update NodeStatusStore
-            live_status["cluster_id"] = new_cluster_id
-            update_node_status(node_id, live_status)
-        
-    except Exception as e:
-        logger.error(f"Failed to check/update cluster_id: {e}")
-        new_cluster_id = old_cluster_id
-    
-    # Return status
+    # Return current status
+    # Note: cluster_id will be generated/updated when Node sends live_status
     return {
         "node_id": node_id,
         "status": "ok",
-        "cluster_id": new_cluster_id,
-        "cluster_changed": old_cluster_id != new_cluster_id,
-        "timestamp": current_time_ms,
+        "cluster_id": db_node.cluster_id,
+        "timestamp": int(time.time() * 1000),
     }
 
 
@@ -959,9 +850,7 @@ async def node_live_status(
     频率: 2-5 秒
     用途: 实时调度决策
     
-    DCM v3.2:
-    - Node Agent 发送实时状态到 Match Engine
-    - Match Engine 使用此数据做调度决策
+    注意: cluster_id 由 capacity_report 生成，不在这里处理
     """
     from ..services.node_status_store import update_node_status
     
@@ -972,10 +861,10 @@ async def node_live_status(
     if not db_node:
         raise HTTPException(status_code=404, detail="Node not found")
     
-    # 更新到 NodeStatusStore
+    # 更新到 NodeStatusStore（不生成 cluster_id）
     update_node_status(node_id, status_data)
     
-    logger.debug(f"Node {node_id} live status updated: concurrency={status_data.get('capacity', {}).get('max_concurrency_available', 0)}")
+    logger.debug(f"Node {node_id} live status updated")
     
     return {
         "received": True,
