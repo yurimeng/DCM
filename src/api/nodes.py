@@ -21,6 +21,16 @@ from ..repositories import NodeRepository, MatchRepository, JobRepository, Escro
 from ..services import matching_service, escrow_service, verification_service, stake_service
 from config import settings
 from ..services.settlement_config import settlement_config
+from src.exceptions import (
+    ErrorCode,
+    HTTPException,
+    raise_not_found,
+    raise_invalid_status,
+    raise_validation_error,
+    raise_bad_request,
+    raise_internal_error,
+)
+
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
 
@@ -39,7 +49,7 @@ def _safe_status(status) -> str:
     return str(status)
 
 
-@router.post("")
+@router.post("", response_model=NodeResponse)
 async def register_node(
     body: dict = Body(...),
     db: Session = Depends(get_db)
@@ -55,24 +65,21 @@ async def register_node(
         pricing: {ask_price}
     }
     
-    Output: {status: "OK", node_id: "xxx"} or {status: "Failed", error: "..."}
+    Output: NodeResponse with node_id and next steps
     
     Note: cluster_id will be assigned after capacity_update
     """
-    import uuid
-    import json
-    
     # 1. Get user_id
     user_id = body.get("user_id")
     if not user_id:
-        return {"status": "Failed", "error": "user_id required"}
+        raise_bad_request("user_id required")
     
     # 2. Validate user
     from ..repositories import UserRepository
     user_repo = UserRepository(db)
     is_valid, _, error_msg = user_repo.validate_user_id(user_id)
     if not is_valid:
-        return {"status": "Failed", "error": error_msg or "Invalid user"}
+        raise_bad_request(error_msg or "Invalid user")
     
     # 3. Create Node
     from ..models import Node
@@ -100,7 +107,7 @@ async def register_node(
     try:
         db_node = node_repo.create(node)
     except Exception as e:
-        return {"status": "Failed", "error": str(e)}
+        raise_internal_error(str(e))
     
     # 5. Update user's node_ids
     user_repo.add_node_to_user(user_id, node.node_id)
@@ -111,7 +118,9 @@ async def register_node(
         model=runtime.get("loaded_models", [None])[0] if runtime.get("loaded_models") else "unknown"
     )
     
-    return {"status": "OK", "node_id": node.node_id}
+    # 7. cluster_id will be assigned after first capacity_report
+    cluster_id = None
+    
     return NodeResponse(
         node_id=node.node_id,
         user_id=user_id,
@@ -123,7 +132,7 @@ async def register_node(
         slot_count=0,
         worker_count=0,
         next_step=f"Deposit {db_node.stake_required} USDC to activate",
-        cluster_id=cluster_id,  # 返回 cluster_id 给 Node
+        cluster_id=cluster_id,
     )
 
 
@@ -211,7 +220,7 @@ async def get_node(
     db_node = node_repo.get(node_id)
     
     if not db_node:
-        raise HTTPException(status_code=404, detail="Node not found")
+        raise_not_found("node", node_id)
     
     return {
         "node_id": db_node.node_id,
@@ -240,7 +249,7 @@ async def node_online(
     db_node = node_repo.get(node_id)
     
     if not db_node:
-        raise HTTPException(status_code=404, detail="Node not found")
+        raise_not_found("node", node_id)
     
     # MVP 模式: stake_required 为 0 时跳过 stake 检查
     if db_node.stake_required > 0:
@@ -249,10 +258,7 @@ async def node_online(
         ).first()
         
         if not stake_record or stake_record.status != "active":
-            raise HTTPException(
-                status_code=400,
-                detail="Stake not deposited or frozen"
-            )
+            raise_bad_request("Stake not deposited or frozen")
     
     # 更新数据库
     node_repo.update(node_id, status=NodeStatus.ONLINE)
@@ -317,7 +323,7 @@ async def delete_node(
     # 获取节点信息
     node = node_repo.get(node_id)
     if not node:
-        raise HTTPException(status_code=404, detail="Node not found")
+        raise_not_found("node", node_id)
     
     # 获取用户 ID
     user_id = node.metadata.get("user_id") if node.metadata else None
@@ -352,7 +358,7 @@ async def poll_job(
     db_node = node_repo.get(node_id)
     
     if not db_node:
-        raise HTTPException(status_code=404, detail="Node not found")
+        raise_not_found("node", node_id)
     
     # 检查节点是否在线（使用 NodeStatusStore）
     from ..services.node_status_store import get_node_info
@@ -369,7 +375,7 @@ async def poll_job(
         logger.error(f"poll_node error: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal_error(str(e))
     
     if match:
         # 更新 Escrow.match_id (修复关联问题)
@@ -462,11 +468,11 @@ async def submit_result(
             )
             match.match_id = db_match.match_id
         else:
-            raise HTTPException(status_code=404, detail="Match not found")
+            raise_not_found("match", match_id)
     
     # 检查是否是该节点
     if match.node_id != node_id:
-        raise HTTPException(status_code=403, detail="Not your job")
+        raise_forbidden("Not your job")
     
     # 获取 Job 对象
     from ..models import Job
@@ -474,7 +480,7 @@ async def submit_result(
     db_job = job_repo.get(job_id)
     
     if not db_job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise_not_found("job", job_id)
     
     try:
         job = Job(
@@ -513,7 +519,13 @@ async def submit_result(
     # 解码并保存结果
     try:
         decoded_result = base64.b64decode(result_submit.result).decode()
-    except:
+    except binascii.Error:
+        # 非法的 base64 数据，使用原始值
+        decoded_result = result_submit.result
+    except UnicodeDecodeError:
+        # 解码错误，使用原始值
+        decoded_result = result_submit.result
+    except Exception:
         decoded_result = result_submit.result
     
     job_repo.update(job_id, 
@@ -592,7 +604,7 @@ async def deposit_stake(
     db_node = node_repo.get(node_id)
     
     if not db_node:
-        raise HTTPException(status_code=404, detail="Node not found")
+        raise_not_found("node", node_id)
     
     # 检查是否已有存款
     existing = db.query(StakeRecordDB).filter(
@@ -600,10 +612,7 @@ async def deposit_stake(
     ).first()
     
     if existing:
-        raise HTTPException(
-            status_code=400,
-            detail="Stake already deposited"
-        )
+        raise_bad_request("Stake already deposited")
     
     # 创建存款记录
     stake_record = StakeRecordDB(
@@ -779,7 +788,7 @@ async def node_capacity_report(
     db_node = node_repo.get(node_id)
     
     if not db_node:
-        raise HTTPException(status_code=404, detail="Node not found")
+        raise_not_found("node", node_id)
     
     # ===== 提取静态配置并更新 DB =====
     update_fields = {}
@@ -909,7 +918,7 @@ async def report_job_error(
     db_match = match_repo.get_by_job(job_id)
     
     if not db_match or db_match.node_id != node_id:
-        raise HTTPException(status_code=404, detail="Match not found")
+        raise_not_found("match", match_id)
     
     error_type = error_data.get("error_type", "unknown")
     error_message = error_data.get("error_message", "")
@@ -936,7 +945,7 @@ async def get_node_config(
     db_node = node_repo.get(node_id)
     
     if not db_node:
-        raise HTTPException(status_code=404, detail="Node not found")
+        raise_not_found("node", node_id)
     
     return {
         "node_id": db_node.node_id,

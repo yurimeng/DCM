@@ -7,7 +7,8 @@ Jobs API - F1: Job 提交与管理系统
 2. JobCreateOpenAI (OpenAI 兼容) - POST /jobs/openai
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends
+from fastapi import HTTPException as FastAPIHTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional, List
@@ -18,6 +19,17 @@ from ..models.job_create_openai import JobCreateOpenAI, Message
 from ..models.db_models import JobStatusDB, EscrowDB, EscrowStatusDB
 from ..repositories import JobRepository, EscrowRepository
 from ..services import matching_service, escrow_service
+from ..services.job_state_manager import job_state_manager
+from src.constants import TimeConstants
+from src.exceptions import (
+    ErrorCode,
+    HTTPException,
+    raise_not_found,
+    raise_invalid_status,
+    raise_validation_error,
+    raise_bad_request,
+    raise_internal_error,
+)
 from config import settings
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -138,7 +150,7 @@ async def create_job(
         logger.error(f"Job creation failed: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal_error(f"Job creation failed: {e}")
 
 
 @router.post("/openai", response_model=JobResponse, name="create_job_openai")
@@ -223,12 +235,12 @@ async def create_job_openai(
     except ValueError as e:
         # Pydantic 验证错误
         logger.error(f"Validation error: {e}")
-        raise HTTPException(status_code=422, detail=str(e))
+        raise_validation_error(str(e))
     except Exception as e:
         logger.error(f"Job creation failed: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal_error(f"Job creation failed: {e}")
 
 
 
@@ -311,7 +323,7 @@ async def get_job(
     db_job = job_repo.get(job_id)
     
     if not db_job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise_not_found("job", job_id)
     
     # 获取 Escrow
     escrow_repo = EscrowRepository(db)
@@ -359,7 +371,7 @@ async def get_job_escrow(
     db_escrow = escrow_repo.get_by_job(job_id)
     
     if not db_escrow:
-        raise HTTPException(status_code=404, detail="Escrow not found")
+        raise_not_found("escrow", job_id)
     
     return {
         "job_id": db_escrow.job_id,
@@ -407,24 +419,21 @@ async def cancel_job_escrow(
     job_repo = JobRepository(db)
     db_job = job_repo.get(job_id)
     if not db_job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise_not_found("job", job_id)
     
     # 检查 Escrow 是否存在
     escrow_repo = EscrowRepository(db)
     db_escrow = escrow_repo.get_by_job(job_id)
     if not db_escrow:
-        raise HTTPException(status_code=404, detail="Escrow not found")
+        raise_not_found("escrow", job_id)
     
     # 检查是否允许取消
     if not settlement_config.escrow_allow_cancellation:
-        raise HTTPException(status_code=400, detail="Escrow cancellation is not allowed")
+        raise_bad_request("Escrow cancellation is not allowed")
     
     # 检查状态
     if db_escrow.status not in [EscrowStatusDB.LOCKED, EscrowStatusDB.COMPLETED]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot cancel: escrow status is {db_escrow.status.value}"
-        )
+        raise_bad_request(f"Cannot cancel: escrow status is {db_escrow.status.value}")
     
     # 执行取消
     db_escrow.status = EscrowStatusDB.CANCELLED
@@ -462,20 +471,17 @@ async def settle_job_escrow(
     job_repo = JobRepository(db)
     db_job = job_repo.get(job_id)
     if not db_job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise_not_found("job", job_id)
     
     # 检查 Escrow 是否存在
     escrow_repo = EscrowRepository(db)
     db_escrow = escrow_repo.get_by_job(job_id)
     if not db_escrow:
-        raise HTTPException(status_code=404, detail="Escrow not found")
+        raise_not_found("escrow", job_id)
     
     # 检查状态
     if db_escrow.status not in [EscrowStatusDB.LOCKED, EscrowStatusDB.COMPLETED]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot settle: escrow status is {db_escrow.status.value}"
-        )
+        raise_bad_request(f"Cannot settle: escrow status is {db_escrow.status.value}")
     
     # 计算结算金额
     actual_tokens = db_job.actual_output_tokens or 0
@@ -540,48 +546,21 @@ async def prelock_job(
     
     触发 Job 的 Pre-lock 状态，设置过期时间
     Node Agent 收到 Pre-lock 后需要在 TTL 内发送 ACK
+    
+    使用 JobStateManager 统一管理状态同步
     """
-    from datetime import datetime, timedelta
-    
-    job_repo = JobRepository(db)
-    db_job = job_repo.get(job_id)
-    
-    if not db_job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    # 检查状态 (只有 MATCHED 状态可以 Pre-lock)
-    if db_job.status != JobStatusDB.MATCHED:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot prelock job in status: {db_job.status}"
-        )
-    
-    # Pre-lock TTL: 30 秒
-    PRELOCK_TTL_SECONDS = 30
-    now = datetime.utcnow()
-    expires_at = now + timedelta(seconds=PRELOCK_TTL_SECONDS)
-    
-    # 更新 Job 状态 (数据库)
-    db_job.status = JobStatusDB.PRE_LOCKED
-    db_job.pre_locked_at = now
-    db_job.pre_lock_expires_at = expires_at
-    
-    # 更新内存服务的 Job 状态
-    memory_job = matching_service._pending_jobs.get(job_id)
-    if memory_job:
-        memory_job.status = JobStatus.PRE_LOCKED
-        memory_job.pre_locked_at = now
-        memory_job.pre_lock_expires_at = expires_at
-    
-    db.commit()
-    
-    return {
-        "job_id": job_id,
-        "status": "pre_locked",
-        "pre_locked_at": now.isoformat(),
-        "pre_lock_expires_at": expires_at.isoformat(),
-        "ttl_seconds": PRELOCK_TTL_SECONDS,
-    }
+    try:
+        db_job = job_state_manager.prelock_job(job_id, db)
+        
+        return {
+            "job_id": job_id,
+            "status": "pre_locked",
+            "pre_locked_at": db_job.pre_locked_at.isoformat() if db_job.pre_locked_at else None,
+            "pre_lock_expires_at": db_job.pre_lock_expires_at.isoformat() if db_job.pre_lock_expires_at else None,
+            "ttl_seconds": TimeConstants.PRELOCK_TTL_SECONDS,
+        }
+    except ValueError as e:
+        raise_bad_request(str(e))
 
 
 @router.post("/{job_id}/prelock/ack")
@@ -594,63 +573,39 @@ async def prelock_ack(
     Pre-lock ACK (DCM v3.1)
     
     Node Agent 确认 Pre-lock，Job 状态变为 RESERVED
+    
+    使用 JobStateManager 统一管理状态同步
     """
-    from datetime import datetime
-    
-    job_repo = JobRepository(db)
-    db_job = job_repo.get(job_id)
-    
-    if not db_job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    # 检查状态
-    if db_job.status != JobStatusDB.PRE_LOCKED:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Job not in pre_locked status: {db_job.status}"
-        )
-    
-    # 检查是否过期
-    if db_job.pre_lock_expires_at and datetime.utcnow() > db_job.pre_lock_expires_at:
-        # 已过期，释放 Pre-lock
-        db_job.status = JobStatusDB.MATCHED
-        db_job.pre_locked_at = None
-        db_job.pre_lock_expires_at = None
+    try:
+        # 先获取当前状态，检查是否过期
+        job_repo = JobRepository(db)
+        db_job_before = job_repo.get(job_id)
         
-        # 更新内存服务
-        memory_job = matching_service._pending_jobs.get(job_id)
-        if memory_job:
-            memory_job.status = JobStatus.MATCHED
-            memory_job.pre_locked_at = None
-            memory_job.pre_lock_expires_at = None
+        if not db_job_before:
+            raise_not_found("job", job_id)
         
-        db.commit()
+        from datetime import datetime
+        if db_job_before.status == JobStatusDB.PRE_LOCKED and \
+           db_job_before.pre_lock_expires_at and \
+           datetime.utcnow() > db_job_before.pre_lock_expires_at:
+            # 已过期，释放 Pre-lock
+            job_state_manager.release_prelock(job_id, db)
+            return {
+                "job_id": job_id,
+                "status": "expired",
+                "message": "Pre-lock expired, job returned to matched"
+            }
+        
+        # 确认 Pre-lock
+        db_job = job_state_manager.prelock_ack(job_id, req.node_id, db)
         
         return {
             "job_id": job_id,
-            "status": "expired",
-            "message": "Pre-lock expired, job returned to matched"
+            "status": "reserved",
+            "message": "Pre-lock confirmed, job reserved"
         }
-    
-    # 确认 Pre-lock
-    db_job.status = JobStatusDB.RESERVED
-    db_job.pre_locked_at = None
-    db_job.pre_lock_expires_at = None
-    
-    # 更新内存服务
-    memory_job = matching_service._pending_jobs.get(job_id)
-    if memory_job:
-        memory_job.status = JobStatus.RESERVED
-        memory_job.pre_locked_at = None
-        memory_job.pre_lock_expires_at = None
-    
-    db.commit()
-    
-    return {
-        "job_id": job_id,
-        "status": "reserved",
-        "message": "Pre-lock confirmed, job reserved"
-    }
+    except ValueError as e:
+        raise_bad_request(str(e))
 
 
 @router.post("/{job_id}/prelock/release")
@@ -662,40 +617,19 @@ async def release_prelock(
     释放 Pre-lock (DCM v3.1)
     
     将 Job 状态从 PRE_LOCKED 恢复到 MATCHED
+    
+    使用 JobStateManager 统一管理状态同步
     """
-    from datetime import datetime
-    
-    job_repo = JobRepository(db)
-    db_job = job_repo.get(job_id)
-    
-    if not db_job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if db_job.status != JobStatusDB.PRE_LOCKED:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Job not in pre_locked status: {db_job.status}"
-        )
-    
-    # 释放 Pre-lock
-    db_job.status = JobStatusDB.MATCHED
-    db_job.pre_locked_at = None
-    db_job.pre_lock_expires_at = None
-    
-    # 更新内存服务
-    memory_job = matching_service._pending_jobs.get(job_id)
-    if memory_job:
-        memory_job.status = JobStatus.MATCHED
-        memory_job.pre_locked_at = None
-        memory_job.pre_lock_expires_at = None
-    
-    db.commit()
-    
-    return {
-        "job_id": job_id,
-        "status": "matched",
-        "message": "Pre-lock released, job returned to matched"
-    }
+    try:
+        job_state_manager.release_prelock(job_id, db)
+        
+        return {
+            "job_id": job_id,
+            "status": "matched",
+            "message": "Pre-lock released, job returned to matched"
+        }
+    except ValueError as e:
+        raise_bad_request(str(e))
 
 
 @router.post("/prelock/cleanup")
@@ -707,31 +641,10 @@ async def cleanup_expired_prelocks(
     
     将所有超时的 PRE_LOCKED Job 状态恢复到 MATCHED
     由定时任务调用
+    
+    使用 JobStateManager 统一管理状态同步
     """
-    from datetime import datetime
-    
-    # 查找所有过期的 Pre-lock
-    expired_jobs = db.query(JobDB).filter(
-        JobDB.status == JobStatusDB.PRE_LOCKED,
-        JobDB.pre_lock_expires_at < datetime.utcnow()
-    ).all()
-    
-    released_count = 0
-    for job in expired_jobs:
-        job.status = JobStatusDB.MATCHED
-        job.pre_locked_at = None
-        job.pre_lock_expires_at = None
-        
-        # 更新内存服务
-        memory_job = matching_service._pending_jobs.get(job.job_id)
-        if memory_job:
-            memory_job.status = JobStatus.MATCHED
-            memory_job.pre_locked_at = None
-            memory_job.pre_lock_expires_at = None
-        
-        released_count += 1
-    
-    db.commit()
+    released_count = job_state_manager.cleanup_expired_prelocks(db)
     
     return {
         "released_count": released_count,
@@ -754,7 +667,7 @@ async def list_jobs(
             job_status = JobStatus(status)
             jobs = job_repo.list_by_status(job_status, limit, offset)
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
+            raise_invalid_status("job", job_id, status)
     else:
         # 简化：返回所有 Jobs
         jobs = db.query(JobDB).offset(offset).limit(limit).all()
@@ -804,9 +717,18 @@ async def get_job_stats(db: Session = Depends(get_db)):
 async def debug_routes():
     """调试端点：列出所有 jobs 路由"""
     routes = []
-    for route in jobs_router.routes:
-        routes.append({
+    for route in router.routes:
+        route_info = {
             "path": route.path,
-            "methods": list(route.methods) if hasattr(route, 'methods') else ['GET']
-        })
-    return {"routes": routes}
+            "methods": list(route.methods) if hasattr(route, 'methods') else ['GET'],
+            "name": getattr(route, 'name', 'unnamed'),
+        }
+        # 获取函数名
+        if hasattr(route, 'endpoint') and route.endpoint:
+            route_info['endpoint'] = route.endpoint.__name__
+        routes.append(route_info)
+    return {
+        "routes": routes,
+        "count": len(routes),
+        "prefix": router.prefix,
+    }

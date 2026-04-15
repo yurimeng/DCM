@@ -9,6 +9,16 @@ from pydantic import BaseModel
 from typing import Optional, List
 
 from ..core.cluster import scaler_service, ScalerService, ScalingConfig, ScalingMetrics, ScalingThresholds
+from src.exceptions import (
+    ErrorCode,
+    HTTPException,
+    raise_not_found,
+    raise_invalid_status,
+    raise_validation_error,
+    raise_bad_request,
+    raise_internal_error,
+)
+
 
 router = APIRouter(prefix="/api/v1/scaler", tags=["scaler"])
 
@@ -133,16 +143,10 @@ async def manual_scale(request: ScaleRequest):
     requested = request.workers
     
     if requested < scaler_service.config.min_workers:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Requested workers ({requested}) less than min_workers ({scaler_service.config.min_workers})"
-        )
+        raise_bad_request("Requested workers ({requested}) less than min_workers ({scaler_service.config.min_workers})")
     
     if requested > scaler_service.config.max_workers:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Requested workers ({requested}) exceeds max_workers ({scaler_service.config.max_workers})"
-        )
+        raise_bad_request("Requested workers ({requested}) exceeds max_workers ({scaler_service.config.max_workers})")
     
     if requested > current:
         # 扩容
@@ -166,10 +170,7 @@ async def scale_up(workers: int = 1):
     POST /api/v1/scaler/scale/up
     """
     if workers < 1:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="workers must be >= 1"
-        )
+        raise_bad_request("workers must be >= 1")
     
     current = len(scaler_service._workers)
     if current + workers > scaler_service.config.max_workers:
@@ -193,10 +194,7 @@ async def scale_down(workers: int = 1):
     POST /api/v1/scaler/scale/down
     """
     if workers < 1:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="workers must be >= 1"
-        )
+        raise_bad_request("workers must be >= 1")
     
     removed = await scaler_service.scale_down(workers)
     
@@ -237,10 +235,7 @@ async def get_worker(worker_id: str):
         if w["worker_id"] == worker_id:
             return w
     
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Worker not found: {worker_id}"
-    )
+    raise_not_found("resource", "Worker not found: {worker_id}")
 
 
 # ==================== 配置端点 ====================

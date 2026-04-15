@@ -12,6 +12,16 @@ from datetime import datetime
 from ..database import get_db
 from ..services import stake_service
 from ..models.db_models import DisputeDB, AppealDB, NodeDB
+from src.exceptions import (
+    ErrorCode,
+    HTTPException,
+    raise_not_found,
+    raise_invalid_status,
+    raise_validation_error,
+    raise_bad_request,
+    raise_internal_error,
+)
+
 
 router = APIRouter(prefix="/api/v1/disputes", tags=["disputes"])
 
@@ -35,7 +45,7 @@ async def get_dispute(
     ).first()
     
     if not db_dispute:
-        raise HTTPException(status_code=404, detail="Dispute not found")
+        raise_not_found("dispute", dispute_id)
     
     # 获取节点信息
     db_node = db.query(NodeDB).filter(
@@ -132,7 +142,7 @@ async def submit_appeal(
     ).first()
     
     if not db_dispute:
-        raise HTTPException(status_code=404, detail="Dispute not found")
+        raise_not_found("dispute", dispute_id)
     
     # 检查是否已提交申诉
     existing = db.query(AppealDB).filter(
@@ -140,11 +150,11 @@ async def submit_appeal(
     ).first()
     
     if existing:
-        raise HTTPException(status_code=400, detail="Appeal already submitted")
+        raise_bad_request("Appeal already submitted")
     
     # 检查是否超过申诉期限
     if db_dispute.appeal_deadline and datetime.utcnow() > db_dispute.appeal_deadline:
-        raise HTTPException(status_code=400, detail="Appeal deadline passed")
+        raise_bad_request("Appeal deadline passed")
     
     # 创建申诉记录
     appeal_id = f"appeal_{dispute_id}_{datetime.utcnow().timestamp()}"
@@ -185,7 +195,7 @@ async def get_appeal(
     ).first()
     
     if not db_appeal:
-        raise HTTPException(status_code=404, detail="Appeal not found")
+        raise_not_found("Appeal not found", "Appeal not found")
     
     return {
         "appeal_id": db_appeal.appeal_id,

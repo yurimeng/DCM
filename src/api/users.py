@@ -28,6 +28,16 @@ from ..models.user import (
 )
 from ..models.user import UserResponse as UserResponseModel
 from ..models.node import NodeStatus
+from src.exceptions import (
+    ErrorCode,
+    HTTPException,
+    raise_not_found,
+    raise_invalid_status,
+    raise_validation_error,
+    raise_bad_request,
+    raise_internal_error,
+)
+
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
 security = HTTPBearer(auto_error=False)
@@ -110,17 +120,17 @@ def get_current_user(
     获取当前认证用户
     """
     if not credentials:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        raise_unauthorized("Not authenticated")
     
     payload = verify_token(credentials.credentials)
     if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        raise_unauthorized("Invalid or expired token")
     
     user_repo = UserRepository(db)
     db_user = user_repo.get(payload["user_id"])
     
     if not db_user:
-        raise HTTPException(status_code=401, detail="User not found")
+        raise_unauthorized("User not found")
     
     return user_repo.to_model(db_user)
 

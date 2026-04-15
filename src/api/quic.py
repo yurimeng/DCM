@@ -12,6 +12,16 @@ import asyncio
 import json
 
 from ..core.quic import quic_service, QUICConfig, InferenceRequest
+from src.exceptions import (
+    ErrorCode,
+    HTTPException,
+    raise_not_found,
+    raise_invalid_status,
+    raise_validation_error,
+    raise_bad_request,
+    raise_internal_error,
+)
+
 
 router = APIRouter(prefix="/api/v1/inference", tags=["inference"])
 
@@ -143,10 +153,7 @@ async def get_inference_status(job_id: str):
     status_info = await quic_service.get_status(job_id)
     
     if not status_info:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session not found: {job_id}"
-        )
+        raise_not_found("session", job_id)
     
     return StatusResponse(**status_info)
 
@@ -161,10 +168,7 @@ async def get_inference_result(job_id: str):
     result = await quic_service.get_result(job_id)
     
     if not result:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Result not found: {job_id}"
-        )
+        raise_not_found("result", job_id)
     
     return ResultResponse(
         job_id=result.job_id,
@@ -237,16 +241,10 @@ async def cancel_inference(job_id: str):
     session = await quic_service.get_session(job_id)
     
     if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session not found: {job_id}"
-        )
+        raise_not_found("session", job_id)
     
     if session.is_complete:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Session already completed: {job_id}"
-        )
+        raise_bad_request(f"Session already completed: {job_id}")
     
     # 取消会话
     await quic_service.fail_inference(job_id, "Cancelled by user", "CANCELLED")

@@ -95,16 +95,20 @@ class JobRepository:
         """转换为 Pydantic 模型"""
         return Job(
             job_id=db_job.job_id,
+            user_id=db_job.user_id or "",
             model=db_job.model,
             input_tokens=db_job.input_tokens,
             output_tokens_limit=db_job.output_tokens_limit,
             max_latency=db_job.max_latency,
             bid_price=db_job.bid_price,
             callback_url=db_job.callback_url,
+            prompt=db_job.prompt,
             status=JobStatus[db_job.status.name.lower()],
             created_at=db_job.created_at,
             matched_at=db_job.matched_at,
             completed_at=db_job.completed_at,
+            pre_locked_at=db_job.pre_locked_at,
+            pre_lock_expires_at=db_job.pre_lock_expires_at,
             actual_output_tokens=db_job.actual_output_tokens,
             final_price=db_job.final_price,
             result=db_job.result,
@@ -199,21 +203,49 @@ class NodeRepository:
         return self.db.query(NodeDB).offset(offset).limit(limit).all()
     
     def to_model(self, db_node: NodeDB) -> Node:
-        """转换为 Pydantic 模型"""
+        """转换为 Pydantic 模型
+        
+        正确映射所有嵌套结构
+        """
+        # 解析 runtime JSON
+        runtime_data = json.loads(db_node.runtime) if isinstance(db_node.runtime, str) else {}
+        model_support = json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else []
+        
         return Node(
             node_id=db_node.node_id,
-            gpu_type=db_node.gpu_type,
-            vram_gb=db_node.vram_gb,
-            model_support=json.loads(db_node.model_support),
-            ask_price=db_node.ask_price,
-            avg_latency=db_node.avg_latency,
-            region=db_node.region,
-            status=NodeStatus[db_node.status.name.lower()],
-            stake_amount=db_node.stake_amount,
-            stake_required=db_node.stake_required,
-            stake_tier=NodeTier(db_node.stake_tier),
-            registered_at=db_node.registered_at,
-            last_heartbeat=db_node.last_heartbeat,
+            user_id=db_node.user_id or "",
+            location=Location(
+                region=db_node.region or "unknown",
+            ),
+            hardware=Hardware(
+                gpu_type=db_node.gpu_type or "unknown",
+                gpu_count=db_node.gpu_count or 1,
+                vram_per_gpu_gb=db_node.vram_gb or 0.0,
+            ),
+            runtime=Runtime(
+                type=runtime_data.get('type', 'ollama'),
+                loaded_models=model_support,
+            ),
+            capability=Capability(
+                max_concurrency_total=db_node.max_concurrency if hasattr(db_node, 'max_concurrency') else 1,
+            ),
+            pricing=Pricing(
+                ask_price_usdc_per_mtoken=db_node.ask_price or 0.000001,
+            ),
+            reliability=Reliability(
+                avg_latency_ms=db_node.avg_latency or 100,
+            ),
+            economy=Economy(
+                stake_amount=db_node.stake_amount or 0.0,
+                stake_required=db_node.stake_required or 0.0,
+                stake_tier=db_node.stake_tier.value if hasattr(db_node.stake_tier, 'value') else (db_node.stake_tier or 'personal'),
+            ),
+            state=NodeState(
+                status=db_node.status.value if hasattr(db_node.status, 'value') else (db_node.status or 'offline'),
+            ),
+            network=Network(
+                cluster_id=db_node.cluster_id,
+            ),
         )
 
 
@@ -485,13 +517,6 @@ class UserRepository:
         根据用户名获取用户
         """
         return self.db.query(UserDB).filter(UserDB.username == username).first()
-    
-    def get_by_node(self, node_id: str) -> Optional[UserDB]:
-        """
-        Get user bound to node
-        获取绑定到节点的用户
-        """
-        return self.db.query(UserDB).filter(UserDB.node_id == node_id).first()
     
     def get_by_wallet(self, wallet_address: str) -> Optional[UserDB]:
         """

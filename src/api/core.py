@@ -10,6 +10,16 @@ from typing import Optional, List
 
 from ..core.cluster import cluster_service, CoreClusterService, ClusterConfig
 from ..core.p2p import p2p_service
+from src.exceptions import (
+    ErrorCode,
+    HTTPException,
+    raise_not_found,
+    raise_invalid_status,
+    raise_validation_error,
+    raise_bad_request,
+    raise_internal_error,
+)
+
 
 router = APIRouter(prefix="/api/v1/core", tags=["core"])
 
@@ -145,10 +155,7 @@ async def node_heartbeat(node_id: str, request: HeartbeatRequest):
     )
     
     if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Node not found: {node_id}"
-        )
+        raise_not_found("resource", "Node not found: {node_id}")
     
     return {"success": True, "node_id": node_id}
 
@@ -163,10 +170,7 @@ async def remove_node(node_id: str):
     success = await cluster_service.remove_node(node_id)
     
     if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Node not found: {node_id}"
-        )
+        raise_not_found("resource", "Node not found: {node_id}")
     
     # 从 P2P 网络断开
     await p2p_service.disconnect_peer(node_id)
@@ -260,10 +264,7 @@ async def select_node():
     node = await cluster_service.select_node()
     
     if not node:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="No healthy nodes available"
-        )
+        raise_internal_error("No healthy nodes available")
     
     return {
         "node_id": node.node_id,

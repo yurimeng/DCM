@@ -11,6 +11,16 @@ from typing import Optional, List
 
 from ..core.p2p import p2p_service, P2PConfig
 from ..core.relay import relay_service
+from src.exceptions import (
+    ErrorCode,
+    HTTPException,
+    raise_not_found,
+    raise_invalid_status,
+    raise_validation_error,
+    raise_bad_request,
+    raise_internal_error,
+)
+
 
 router = APIRouter(prefix="/api/v1/p2p", tags=["p2p"])
 
@@ -165,10 +175,7 @@ async def connect_peer(request: ConnectPeerRequest):
                                 (await p2p_service.get_peer(request.peer_id)).relay_node else "direct"
         }
     else:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to connect to peer: {request.peer_id}"
-        )
+        raise_internal_error("Failed to connect to peer: {request.peer_id}")
 
 
 @router.post("/peers/disconnect")

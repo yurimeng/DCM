@@ -281,8 +281,14 @@ class GPUMonitor:
             )
             if result.returncode == 0:
                 return "nvidia"
-        except:
-            pass
+        except FileNotFoundError:
+            pass  # nvidia-smi 不存在，继续检测
+        except PermissionError:
+            pass  # 无权限
+        except subprocess.TimeoutExpired:
+            pass  # 超时
+        except Exception:
+            pass  # 其他错误
         
         # 检查 AMD ROCm
         try:
@@ -293,8 +299,14 @@ class GPUMonitor:
             )
             if result.returncode == 0:
                 return "rocm"
-        except:
-            pass
+        except FileNotFoundError:
+            pass  # rocm-smi 不存在，继续检测
+        except PermissionError:
+            pass  # 无权限
+        except subprocess.TimeoutExpired:
+            pass  # 超时
+        except Exception:
+            pass  # 其他错误
         
         return "mock"
     

@@ -585,11 +585,6 @@ def get_node_status(node_id: str) -> Dict:
     return node_status_store.get_node_status(node_id)
 
 
-def get_node_status(node_id: str) -> Dict:
-    """获取 Node 状态"""
-    return node_status_store.get_node_status(node_id)
-
-
 def get_all_node_status() -> Dict[str, Dict]:
     """获取所有 Node 状态"""
     return node_status_store.get_all()

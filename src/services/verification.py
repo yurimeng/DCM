@@ -38,7 +38,13 @@ class VerificationService:
         # 解码 Base64
         try:
             decoded_result = base64.b64decode(result).decode()
-        except:
+        except binascii.Error:
+            # 非法的 base64 数据，视为纯文本
+            decoded_result = result
+        except UnicodeDecodeError:
+            # UTF-8 解码错误
+            decoded_result = result
+        except Exception:
             decoded_result = result
         
         # 1. 哈希验证

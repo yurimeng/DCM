@@ -9,6 +9,16 @@ from pydantic import BaseModel
 from typing import Optional, List
 
 from ..core.relay import relay_service, RelayConfig
+from src.exceptions import (
+    ErrorCode,
+    HTTPException,
+    raise_not_found,
+    raise_invalid_status,
+    raise_validation_error,
+    raise_bad_request,
+    raise_internal_error,
+)
+
 
 router = APIRouter(prefix="/api/v1/relay", tags=["relay"])
 
@@ -126,10 +136,7 @@ async def get_relay_node(peer_id: str):
     node = await relay_service.get_relay_node(peer_id)
     
     if not node:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Relay node not found: {peer_id}"
-        )
+        raise_not_found("resource", "Relay node not found: {peer_id}")
     
     return {
         "peer_id": node.peer_id,
@@ -185,10 +192,7 @@ async def diagnose_connection(peer_id: str):
     diagnostics = await relay_service.diagnose_connection(peer_id)
     
     if not diagnostics:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No connection info for peer: {peer_id}"
-        )
+        raise_not_found("resource", "No connection info for peer: {peer_id}")
     
     return RelayDiagnosticsResponse(
         peer_id=diagnostics["peer_id"],

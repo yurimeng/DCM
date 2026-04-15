@@ -8,6 +8,16 @@ from pydantic import BaseModel
 from typing import Optional, List
 
 from ..core.wallet import wallet_service
+from src.exceptions import (
+    ErrorCode,
+    HTTPException,
+    raise_not_found,
+    raise_invalid_status,
+    raise_validation_error,
+    raise_bad_request,
+    raise_internal_error,
+)
+
 
 router = APIRouter(prefix="/api/v1/wallet", tags=["wallet"])
 
@@ -78,7 +88,7 @@ async def initialize_wallet():
 async def create_account(request: CreateAccountRequest):
     """创建新账户"""
     if request.role not in ["buyer", "node", "system"]:
-        raise HTTPException(status_code=400, detail="Invalid role")
+        raise_bad_request("Invalid role")
     
     account = wallet_service.create_account(
         role=request.role,
@@ -105,7 +115,7 @@ async def get_account(account_id: str):
     account = wallet_service.get_account(account_id)
     
     if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+        raise_not_found("Account not found", "Account not found")
     
     return account.to_dict()
 
@@ -116,7 +126,7 @@ async def get_balance(account_id: str):
     balance = wallet_service.get_balance(account_id)
     
     if balance is None:
-        raise HTTPException(status_code=404, detail="Account not found")
+        raise_not_found("Account not found", "Account not found")
     
     return {
         "account_id": account_id,
@@ -130,7 +140,7 @@ async def get_transactions(account_id: str):
     account = wallet_service.get_account(account_id)
     
     if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+        raise_not_found("Account not found", "Account not found")
     
     return {
         "account_id": account_id,
@@ -152,7 +162,7 @@ async def transfer(request: TransferRequest):
     )
     
     if not success:
-        raise HTTPException(status_code=400, detail="Transfer failed (insufficient balance or invalid account)")
+        raise_bad_request("Transfer failed (insufficient balance or invalid account)")
     
     return {
         "success": True,
@@ -174,7 +184,7 @@ async def escrow_lock(request: EscrowLockRequest):
     )
     
     if not success:
-        raise HTTPException(status_code=400, detail="Escrow lock failed")
+        raise_bad_request("Escrow lock failed")
     
     return {
         "success": True,
@@ -194,7 +204,7 @@ async def escrow_release(request: EscrowReleaseRequest):
     )
     
     if not success:
-        raise HTTPException(status_code=400, detail="Escrow release failed")
+        raise_bad_request("Escrow release failed")
     
     return {
         "success": True,
@@ -216,7 +226,7 @@ async def escrow_settle(request: EscrowSettleRequest):
     )
     
     if not success:
-        raise HTTPException(status_code=400, detail="Escrow settlement failed")
+        raise_bad_request("Escrow settlement failed")
     
     return {
         "success": True,
@@ -238,7 +248,7 @@ async def stake_deposit(account_id: str, amount: float):
     )
     
     if not success:
-        raise HTTPException(status_code=400, detail="Stake deposit failed")
+        raise_bad_request("Stake deposit failed")
     
     return {
         "success": True,

@@ -410,7 +410,9 @@ class OllamaAdapter(RuntimeAdapter):
         try:
             response = requests.get(f"{self.base_url}/api/tags", timeout=5)
             return response.status_code == 200
-        except:
+        except requests.RequestException:
+            return False
+        except Exception:
             return False
     
     def list_models(self) -> List[str]:
@@ -421,9 +423,12 @@ class OllamaAdapter(RuntimeAdapter):
             if response.status_code == 200:
                 data = response.json()
                 return [m.get("name", "") for m in data.get("models", [])]
-        except:
-            pass
-        return []
+        except requests.RequestException:
+            return []
+        except ValueError:  # JSON decode error
+            return []
+        except Exception:
+            return []
 
 
 class VLLMAdapter(RuntimeAdapter):
@@ -567,7 +572,9 @@ class VLLMAdapter(RuntimeAdapter):
         try:
             response = requests.get(f"{self.base_url}/models", timeout=5)
             return response.status_code == 200
-        except:
+        except requests.RequestException:
+            return False
+        except Exception:
             return False
     
     def list_models(self) -> List[str]:
@@ -578,9 +585,12 @@ class VLLMAdapter(RuntimeAdapter):
             if response.status_code == 200:
                 data = response.json()
                 return [m.get("id", "") for m in data.get("data", [])]
-        except:
-            pass
-        return []
+        except requests.RequestException:
+            return []
+        except ValueError:  # JSON decode error
+            return []
+        except Exception:
+            return []
 
 
 class LlamaCppAdapter(RuntimeAdapter):
@@ -719,7 +729,9 @@ class LlamaCppAdapter(RuntimeAdapter):
         try:
             response = requests.get(self.base_url, timeout=5)
             return response.status_code == 200
-        except:
+        except requests.RequestException:
+            return False
+        except Exception:
             return False
     
     def list_models(self) -> List[str]:

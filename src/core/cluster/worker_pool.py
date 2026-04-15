@@ -506,14 +506,18 @@ class WorkerPoolService:
                     if self._on_worker_destroy:
                         try:
                             await self._on_worker_destroy(worker_id)
-                        except:
-                            pass
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            pass  # 忽略回调中的错误，避免阻止销毁流程
                     
                     if self._p2p_service:
                         try:
                             await self._p2p_service.disconnect_peer(worker_id)
-                        except:
-                            pass
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            pass  # 忽略网络错误
                     
                     del self._workers[worker_id]
                     return True

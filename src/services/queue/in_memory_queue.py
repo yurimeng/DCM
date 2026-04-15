@@ -406,7 +406,11 @@ class InMemoryJobQueue(JobQueueService):
             queued = datetime.fromisoformat(job_data["queued_at"])
             dequeued = datetime.fromisoformat(job_data["dequeued_at"])
             return (dequeued - queued).total_seconds() * 1000
-        except:
+        except KeyError:
+            return 0
+        except ValueError:
+            return 0
+        except Exception:
             return 0
     
     def _parse_family(self, model: str) -> str:

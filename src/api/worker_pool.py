@@ -18,6 +18,16 @@ from typing import Optional, List
 from ..core.cluster import worker_pool_service, WorkerPoolService
 from ..core.p2p import p2p_service
 from ..core.relay import relay_service
+from src.exceptions import (
+    ErrorCode,
+    HTTPException,
+    raise_not_found,
+    raise_invalid_status,
+    raise_validation_error,
+    raise_bad_request,
+    raise_internal_error,
+)
+
 
 router = APIRouter(prefix="/api/v1/workers", tags=["workers"])
 
@@ -137,10 +147,7 @@ async def worker_heartbeat(worker_id: str, request: HeartbeatRequest):
     )
     
     if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Worker not found: {worker_id}"
-        )
+        raise_not_found("Worker not found", worker_id)
     
     return {"acknowledged": True}
 
@@ -156,16 +163,10 @@ async def drain_worker(worker_id: str):
     """
     worker = await worker_pool_service.get_worker(worker_id)
     if not worker:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Worker not found: {worker_id}"
-        )
+        raise_not_found("Worker not found", worker_id)
     
     if worker.status == "draining":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Worker already draining: {worker_id}"
-        )
+        raise_bad_request("Worker already draining: {worker_id}")
     
     # 启动 draining (异步)
     asyncio.create_task(_async_drain_worker(worker_id))
@@ -192,10 +193,7 @@ async def remove_worker(worker_id: str):
     success = await worker_pool_service.remove_worker(worker_id)
     
     if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Worker not found: {worker_id}"
-        )
+        raise_not_found("Worker not found", worker_id)
     
     await p2p_service.disconnect_peer(worker_id)
     
@@ -245,10 +243,7 @@ async def get_worker(worker_id: str):
     worker = await worker_pool_service.get_worker(worker_id)
     
     if not worker:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Worker not found: {worker_id}"
-        )
+        raise_not_found("Worker not found", worker_id)
     
     # 获取网络诊断
     diagnostics = await relay_service.diagnose_connection(worker_id)
@@ -285,10 +280,7 @@ async def dispatch_request(worker_id: str):
     success = await worker_pool_service.dispatch_request(worker_id)
     
     if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Worker not found or not available: {worker_id}"
-        )
+        raise_not_found("Worker not found or not available", worker_id)
     
     worker = await worker_pool_service.get_worker(worker_id)
     
@@ -306,10 +298,7 @@ async def complete_request(worker_id: str):
     success = await worker_pool_service.complete_request(worker_id)
     
     if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Worker not found: {worker_id}"
-        )
+        raise_not_found("Worker not found", worker_id)
     
     return {"success": True}
 
@@ -326,9 +315,7 @@ async def select_worker():
     worker = await worker_pool_service.select_worker()
     
     if not worker:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="No available workers"
+        raise_bad_request("No available workers"
         )
     
     return {
@@ -398,10 +385,7 @@ async def reconnect_worker(worker_id: str):
     worker = await worker_pool_service.get_worker(worker_id)
     
     if not worker:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Worker not found: {worker_id}"
-        )
+        raise_not_found("Worker not found", worker_id)
     
     if worker.p2p_connected:
         return {
@@ -411,10 +395,7 @@ async def reconnect_worker(worker_id: str):
         }
     
     if not worker.can_retry:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Worker max retry count exceeded: {worker.max_retry_count}"
-        )
+        raise_bad_request("Worker max retry count exceeded: {worker.max_retry_count}")
     
     # 触发重连
     worker.last_reconnect_attempt = None  # 允许立即重连
