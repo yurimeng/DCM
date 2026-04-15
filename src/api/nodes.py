@@ -227,7 +227,6 @@ async def get_node(
         "stake_required": db_node.stake_required,
         "stake_tier": db_node.stake_tier,
         "registered_at": db_node.registered_at.isoformat() if db_node.registered_at else None,
-        "last_heartbeat": db_node.last_heartbeat.isoformat() if db_node.last_heartbeat else None,
     }
 
 
@@ -693,112 +692,6 @@ async def list_nodes(
         "total": db.query(NodeDB).count(),
         "limit": limit,
         "offset": offset,
-    }
-
-
-@router.post("/{node_id}/heartbeat")
-async def node_heartbeat(
-    node_id: str,
-    heartbeat_data: dict,
-    db: Session = Depends(get_db)
-):
-    """
-    节点心跳（HTTP Polling 模式）
-    
-    Node Agent 定期发送心跳，报告状态
-    包含用户身份验证
-    
-    DCM v3.2 重要更新:
-    - 心跳中可以包含 runtime 和 model
-    - 用于更新 Node 的运行时信息
-    - Node Agent 启动 Runtime 后会通过心跳更新
-    """
-    # Validate user_id from heartbeat / 验证心跳中的用户 ID
-    user_id = heartbeat_data.get("user_id")
-    user_disabled = False
-    
-    if user_id:
-        from ..repositories import UserRepository
-        user_repo = UserRepository(db)
-        is_valid, user_db, error_msg = user_repo.validate_user_id(user_id)
-        
-        if not is_valid:
-            logger.warning(f"User validation failed on heartbeat: {error_msg}")
-            # Return 403 to indicate user is disabled/invalid
-            raise HTTPException(status_code=403, detail=error_msg)
-        
-        # Check if user is disabled
-        if user_db.status == "disabled":
-            user_disabled = True
-            logger.warning(f"User {user_id} is disabled!")
-    
-    node_repo = NodeRepository(db)
-    db_node = node_repo.get(node_id)
-    
-    if not db_node:
-        raise HTTPException(status_code=404, detail="Node not found")
-    
-    # 更新心跳时间 / Update heartbeat time
-    node_repo.update_heartbeat(node_id)
-    
-    # ===== 更新 Runtime 和 Model (DCM v3.2) =====
-    # Node Agent 启动 Runtime 后会通过心跳更新这些字段
-    update_fields = {}
-    
-    # runtime 和 model 可以在心跳中更新
-    if heartbeat_data.get("runtime"):
-        update_fields["runtime"] = heartbeat_data["runtime"]
-    
-    if heartbeat_data.get("model"):
-        update_fields["model"] = heartbeat_data["model"]
-    
-    # GPU 信息也可能通过心跳更新
-    if heartbeat_data.get("gpu_type"):
-        update_fields["gpu_type"] = heartbeat_data["gpu_type"]
-    
-    if heartbeat_data.get("vram_gb"):
-        update_fields["vram_gb"] = heartbeat_data["vram_gb"]
-    
-    if update_fields:
-        node_repo.update(node_id, **update_fields)
-        logger.info(f"Node {node_id} updated via heartbeat: {list(update_fields.keys())}")
-    
-    # 检查节点是否在 NodeStatusStore 中（使用新的 get_node_info API）
-    from ..services.node_status_store import get_node_info
-    node_info = get_node_info(node_id)
-    is_online = node_info.is_online
-    re_register = not is_online and db_node.status == NodeStatusDB.ONLINE
-    
-    # 获取 Pre-lock Jobs (通过 matching_service)
-    pre_lock_jobs = []
-    try:
-        # 通过内存服务获取 Pre-lock Jobs
-        prelocked_jobs = matching_service.get_node_prelock_jobs(node_id)
-        
-        for job in prelocked_jobs:
-            pre_lock_jobs.append({
-                "job_id": job.job_id,
-                "prompt": job.prompt,
-                "model": job.model,
-                "pre_lock_expires_at": job.pre_lock_expires_at.isoformat() if job.pre_lock_expires_at else None,
-            })
-        
-        if pre_lock_jobs:
-            logger.info(f"节点 {node_id} 有 {len(pre_lock_jobs)} 个 Pre-lock Jobs")
-    except Exception as e:
-        logger.warning(f"获取 Pre-lock Jobs 失败: {e}")
-    
-    return {
-        "node_id": node_id,
-        "status": heartbeat_data.get("status", "idle"),
-        "timestamp": int(datetime.utcnow().timestamp() * 1000),
-        "is_online": is_online,
-        "re_register": re_register,
-        "pre_lock_jobs": pre_lock_jobs,
-        "pre_lock_count": len(pre_lock_jobs),
-        # User authentication status / 用户认证状态
-        "user_disabled": user_disabled,
-        "user_id": user_id,
     }
 
 

@@ -121,7 +121,6 @@ class NodeDB(Base):
     stake_tier = Column(SQLEnum(NodeTierDB), default=NodeTierDB.PERSONAL)
     
     registered_at = Column(DateTime, default=datetime.utcnow)
-    last_heartbeat = Column(DateTime, nullable=True)
     
     # 用户绑定（注册时从 NodeCreate.user_id 获取）
     user_id = Column(String(36), nullable=True, index=True)

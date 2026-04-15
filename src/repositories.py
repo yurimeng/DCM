@@ -198,15 +198,6 @@ class NodeRepository:
         """列出所有节点"""
         return self.db.query(NodeDB).offset(offset).limit(limit).all()
     
-    def update_heartbeat(self, node_id: str) -> Optional[NodeDB]:
-        """更新心跳时间"""
-        node = self.get(node_id)
-        if node:
-            node.last_heartbeat = datetime.utcnow()
-            self.db.commit()
-            self.db.refresh(node)
-        return node
-    
     def to_model(self, db_node: NodeDB) -> Node:
         """转换为 Pydantic 模型"""
         return Node(
