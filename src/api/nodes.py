@@ -885,17 +885,24 @@ async def node_capacity_report(
     prev_status = node_status_store.get(node_id)
     
     # 合并状态
+    # capacity_report 优先使用自己的 runtime.loaded_models 作为 model_support
     merged_status = {
         "timestamp": report_data.get("timestamp"),
         "status": {},
         "capacity": report_data.get("capacity", {}),
         "load": report_data.get("load", {}),
     }
+    
+    # 从 capacity_report 提取 runtime 信息
+    runtime_data = report_data.get("runtime", {})
+    report_models = runtime_data.get("loaded_models", [])
+    
+    # 从 prev_status 提取备用字段
     if prev_status:
-        # 保留之前 status 中的字段
         prev_st = prev_status.get("status", {})
         merged_status["status"]["status"] = "online"
-        merged_status["status"]["model_support"] = prev_st.get("model_support", [])
+        # 优先使用 capacity_report 的 models
+        merged_status["status"]["model_support"] = report_models if report_models else prev_st.get("model_support", [])
         merged_status["status"]["ask_price"] = prev_st.get("ask_price", 0.001)
         merged_status["status"]["avg_latency"] = prev_st.get("avg_latency", 100)
         merged_status["status"]["gpu_count"] = prev_st.get("gpu_count", 1)
@@ -903,6 +910,10 @@ async def node_capacity_report(
         merged_status["status"]["vram_used_gb"] = prev_st.get("vram_used_gb", 0)
         merged_status["status"]["vram_total_gb"] = prev_st.get("vram_total_gb", 0)
         merged_status["load"] = prev_status.get("load", {})
+    else:
+        # 没有 prev_status，使用 capacity_report 的数据
+        merged_status["status"]["status"] = "online"
+        merged_status["status"]["model_support"] = report_models
     
     # 准备 capacity_info 用于 NodeStatusStore 生成 cluster_id
     models = []
