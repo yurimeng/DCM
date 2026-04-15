@@ -1053,6 +1053,7 @@ async def debug_node_login(
         result["user_error"] = error_msg
     except Exception as e:
         result["user_error"] = str(e)
+        result["user_trace"] = traceback.format_exc()
         return {"error": result}
     
     # 2. Check node
@@ -1063,10 +1064,25 @@ async def debug_node_login(
         if db_node:
             result["node_user_id"] = db_node.user_id
             result["node_cluster_id"] = db_node.cluster_id
+            result["node_cluster_id_type"] = type(db_node.cluster_id).__name__
             result["node_runtime"] = db_node.runtime
+            result["node_runtime_type"] = type(db_node.runtime).__name__
     except Exception as e:
         result["node_error"] = str(e)
         result["node_trace"] = traceback.format_exc()
+    
+    # 3. Test return value
+    try:
+        return_value = {
+            "node_id": node_id,
+            "status": "ok",
+            "cluster_id": db_node.cluster_id,
+            "timestamp": 1234567890,
+        }
+        result["return_value"] = return_value
+    except Exception as e:
+        result["return_error"] = str(e)
+        result["return_trace"] = traceback.format_exc()
     
     return result
 
