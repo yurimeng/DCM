@@ -528,7 +528,11 @@ class MatchingService:
         # 确定实际使用的模型
         # - 如果 job 指定了 model → 使用该 model
         # - 如果 job 未指定 model → 使用节点支持的第一个模型（最便宜/最快）
-        used_model = job.model if job.model else (node.model_support[0] if node.model_support else None)
+        # 注意: job.model 是 property，会造成递归，所以使用 model_requirement 或 node model
+        job_model = getattr(job, 'model_requirement', None) or getattr(job, 'model', None)
+        if job_model is None and hasattr(node, 'model_support') and node.model_support:
+            job_model = node.model_support[0] if node.model_support else "qwen2.5:7b"
+        used_model = job_model or "qwen2.5:7b"
         
         # 创建 Match
         match = Match(

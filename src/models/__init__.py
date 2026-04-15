@@ -40,6 +40,9 @@ from .worker import Worker, WorkerStatus, WorkerResponse
 # Runtime models
 from .runtime import Runtime, RuntimeType, RuntimeStatus
 
+# OpenAI Compatible models (DCM v3.2)
+from .job_create_openai import JobCreateOpenAI, Message
+
 # Escrow models
 from .escrow import Escrow, EscrowStatus, SettlementRequest
 
@@ -108,6 +111,9 @@ __all__ = [
     "Runtime",
     "RuntimeType",
     "RuntimeStatus",
+    # OpenAI Compatible
+    "JobCreateOpenAI",
+    "Message",
     # Escrow
     "Escrow",
     "EscrowStatus",

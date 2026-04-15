@@ -389,13 +389,15 @@ async def poll_job(
         # 获取 generation 参数
         max_tokens = db_job.output_tokens_limit if db_job else 100
         
-        # 构建完整的 invoke 结构 (OpenAI 兼容)
-        model_info = {
-            "name": match.model,
-            "family": match.model.split(":")[0] if ":" in match.model else match.model,
-            "context_window": 32768
+        # 构建 model dict (统一格式 - DCM v3.2)
+        model_name = match.model or "qwen2.5:7b"
+        model_dict = {
+            "name": model_name,
+            "family": model_name.split(":")[0] if ":" in model_name else model_name,
+            "context_window": 32768,
         }
         
+        # 构建完整的 invoke 结构 (OpenAI 兼容)
         invoke_input = {
             "type": "chat_completion",
             "messages": [
@@ -422,8 +424,7 @@ async def poll_job(
             execution_id=f"exec_{match.match_id}",
             job_id=match.job_id,
             slot_id=match.slot_id,
-            model=match.model,  # Model name string
-            model_info=model_info,  # Extended model info
+            model=model_dict,  # Model dict (统一格式 - DCM v3.2)
             input=invoke_input,
             generation=generation,
             runtime=runtime,
@@ -703,17 +704,47 @@ async def node_live_status(
     频率: 2-5 秒
     用途: 实时调度决策
     
-    无状态：直接更新到 NodeStatusStore，不检查 DB
+    DCM v3.2: 合并 model_support 等静态配置
     """
-    from ..services.node_status_store import update_node_status
+    from ..services.node_status_store import update_node_status, node_status_store
     
     # 确保 timestamp 存在（用于判断 is_online）
     import time
     if "timestamp" not in status_data or not status_data["timestamp"]:
         status_data = {**status_data, "timestamp": int(time.time() * 1000)}
     
-    # 直接更新到 NodeStatusStore（不生成 cluster_id）
-    update_node_status(node_id, status_data)
+    # ===== 合并静态配置 (model_support, ask_price 等) =====
+    prev_status = node_status_store.get(node_id)
+    merged_status = {
+        "timestamp": status_data.get("timestamp"),
+        "status": {"status": "online"},
+        "capacity": status_data.get("capacity", {}),
+        "load": status_data.get("load", {}),
+    }
+    
+    # 从 status_data 或 prev_status 获取 model_support
+    runtime_data = status_data.get("runtime", {})
+    report_models = runtime_data.get("loaded_models", [])
+    
+    if report_models:
+        merged_status["status"]["model_support"] = report_models
+    elif prev_status:
+        merged_status["status"]["model_support"] = prev_status.get("status", {}).get("model_support", [])
+    
+    # ask_price
+    if status_data.get("ask_price"):
+        merged_status["status"]["ask_price"] = float(status_data["ask_price"])
+    elif prev_status:
+        merged_status["status"]["ask_price"] = prev_status.get("status", {}).get("ask_price", 0.000001)
+    
+    # avg_latency
+    if status_data.get("avg_latency"):
+        merged_status["status"]["avg_latency"] = int(status_data["avg_latency"])
+    elif prev_status:
+        merged_status["status"]["avg_latency"] = prev_status.get("status", {}).get("avg_latency", 100)
+    
+    # 更新到 NodeStatusStore
+    update_node_status(node_id, merged_status)
     
     logger.debug(f"Node {node_id} live status updated")
     

@@ -318,9 +318,24 @@ class NodePollResponse(BaseModel):
     """Node 轮询响应"""
     has_job: bool
     job_id: Optional[str] = None
-    model: Optional[str] = None
+    # model 统一为 Dict 结构 (DCM v3.2)
+    model: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="模型信息: {name, family, context_window, ...}"
+    )
     timeout_seconds: Optional[int] = None
     pre_lock_expires_at: Optional[str] = None
+    # 扩展字段
+    model_info: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="扩展模型信息 (已废弃，统一使用 model)"
+    )
+    execution_id: Optional[str] = None
+    slot_id: Optional[str] = None
+    input: Optional[Dict[str, Any]] = None
+    generation: Optional[Dict[str, Any]] = None
+    runtime: Optional[Dict[str, Any]] = None
+    locked_price: Optional[float] = None
 
 
 class NodeResultSubmit(BaseModel):

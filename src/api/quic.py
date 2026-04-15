@@ -7,7 +7,7 @@ F14: QUIC Transport - API 端点
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, Union
 import asyncio
 import json
 
@@ -19,14 +19,23 @@ router = APIRouter(prefix="/api/v1/inference", tags=["inference"])
 # ==================== 请求/响应模型 ====================
 
 class ExecuteRequest(BaseModel):
+    """推理执行请求 (DCM v3.2)"""
     job_id: str
     match_id: str
-    model: str
+    model: Union[Dict[str, Any], str]  # Dict 或 String (DCM v3.2)
     prompt: str
     max_tokens: int = 256
     temperature: float = 0.7
     stream: bool = True
     timeout_ms: int = 30000
+    
+    def get_model_name(self) -> str:
+        """获取模型名称 (兼容处理)"""
+        if isinstance(self.model, dict):
+            return self.model.get("name", "qwen2.5:7b")
+        elif isinstance(self.model, str):
+            return self.model
+        return "qwen2.5:7b"
 
 
 class ExecuteResponse(BaseModel):

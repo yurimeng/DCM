@@ -7,9 +7,13 @@ Runtime 输入/输出标准化
 - vLLM
 - llama.cpp
 - transformers
+
+Model 字段说明:
+- model: Dict[str, Any] - 包含 name, family, context_window 等元数据
+- 兼容字符串格式 (旧格式)，自动转换
 """
 
-from typing import Optional, List, Dict, Any, Iterator
+from typing import Optional, List, Dict, Any, Iterator, Union
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from abc import ABC, abstractmethod
@@ -57,24 +61,48 @@ class TokenUsage:
 @dataclass
 class RuntimeRequest:
     """
-    Runtime 请求结构
+    Runtime 请求结构 (DCM v3.2)
     
     DCM Job 执行时发送给 Node Runtime 的标准化请求
+    
+    Model 字段: Union[Dict, str]
+    - Dict 格式: {"name": "qwen2.5:7b", "family": "qwen", "context_window": 32768}
+    - String 格式: "qwen2.5:7b" (兼容旧格式)
     """
     execution_id: str
     job_id: str
-    model: str
+    model: Union[Dict[str, Any], str]  # Dict 或 String (DCM v3.2)
     messages: List[Message]
     generation: GenerationParams = field(default_factory=GenerationParams)
     limits: RuntimeLimits = field(default_factory=RuntimeLimits)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    def get_model_name(self) -> str:
+        """获取模型名称 (兼容处理)"""
+        if isinstance(self.model, dict):
+            return self.model.get("name", "qwen2.5:7b")
+        elif isinstance(self.model, str):
+            return self.model
+        return "qwen2.5:7b"
+    
+    def get_model_family(self) -> str:
+        """获取模型家族 (兼容处理)"""
+        if isinstance(self.model, dict):
+            family = self.model.get("family", "")
+            if not family:
+                name = self.model.get("name", "qwen2.5:7b")
+                family = name.split(":")[0] if ":" in name else name
+            return family
+        elif isinstance(self.model, str):
+            return self.model.split(":")[0] if ":" in self.model else self.model
+        return "qwen2.5:7b"
     
     def to_dict(self) -> Dict:
         """转换为字典"""
         return {
             "execution_id": self.execution_id,
             "job_id": self.job_id,
-            "model": self.model,
+            "model": self.model,  # 保持原始格式
             "messages": [
                 {"role": m.role, "content": m.content, "name": m.name}
                 for m in self.messages
@@ -269,8 +297,9 @@ class OllamaAdapter(RuntimeAdapter):
         start_time = time.time()
         
         # 构建 Ollama 格式
+        # 使用兼容方法获取模型名称 (DCM v3.2)
         payload = {
-            "model": request.model,
+            "model": request.get_model_name(),
             "prompt": self._messages_to_prompt(request.messages),
             "options": {
                 "temperature": request.generation.temperature,
@@ -333,8 +362,9 @@ class OllamaAdapter(RuntimeAdapter):
         """Ollama 流式生成"""
         import requests
         
+        # 使用兼容方法获取模型名称 (DCM v3.2)
         payload = {
-            "model": request.model,
+            "model": request.get_model_name(),
             "prompt": self._messages_to_prompt(request.messages),
             "options": {
                 "temperature": request.generation.temperature,
@@ -425,7 +455,7 @@ class VLLMAdapter(RuntimeAdapter):
         ]
         
         payload = {
-            "model": request.model,
+            "model": request.get_model_name(),  # 兼容处理 (DCM v3.2)
             "messages": messages,
             "temperature": request.generation.temperature,
             "max_tokens": request.generation.max_tokens,
@@ -491,7 +521,7 @@ class VLLMAdapter(RuntimeAdapter):
         ]
         
         payload = {
-            "model": request.model,
+            "model": request.get_model_name(),  # 兼容处理 (DCM v3.2)
             "messages": messages,
             "temperature": request.generation.temperature,
             "max_tokens": request.generation.max_tokens,

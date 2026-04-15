@@ -2,12 +2,16 @@
 F14: QUIC Transport - 数据模型
 
 推理数据的可靠传输层模型
+
+DCM v3.2:
+- model 字段统一为 Dict 结构，包含 name, family 等元数据
+- 兼容字符串格式
 """
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Dict, Any, Union
 
 
 class InferenceStatus(Enum):
@@ -30,10 +34,10 @@ class ConnectionState(Enum):
 
 @dataclass
 class InferenceRequest:
-    """推理请求"""
+    """推理请求 (DCM v3.2)"""
     job_id: str
     match_id: str
-    model: str
+    model: Union[Dict[str, Any], str]  # Dict 或 String (DCM v3.2)
     prompt: str
     max_tokens: int = 256
     temperature: float = 0.7
@@ -44,6 +48,26 @@ class InferenceRequest:
     created_at: datetime = field(default_factory=datetime.utcnow)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    
+    def get_model_name(self) -> str:
+        """获取模型名称 (兼容处理)"""
+        if isinstance(self.model, dict):
+            return self.model.get("name", "qwen2.5:7b")
+        elif isinstance(self.model, str):
+            return self.model
+        return "qwen2.5:7b"
+    
+    def get_model_family(self) -> str:
+        """获取模型家族 (兼容处理)"""
+        if isinstance(self.model, dict):
+            family = self.model.get("family", "")
+            if not family:
+                name = self.model.get("name", "qwen2.5:7b")
+                family = name.split(":")[0] if ":" in name else name
+            return family
+        elif isinstance(self.model, str):
+            return self.model.split(":")[0] if ":" in self.model else self.model
+        return "qwen2.5:7b"
     
     def start(self):
         self.started_at = datetime.utcnow()

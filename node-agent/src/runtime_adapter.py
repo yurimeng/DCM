@@ -1,6 +1,10 @@
 """
 Runtime Adapter Layer - 统一推理引擎接口
 基于 F16-Runtime-Adapter-Layer 规范
+
+DCM v3.2:
+- model 字段统一为 Dict 结构 {name, family, context_window, ...}
+- 保留对字符串格式的兼容处理
 """
 
 import time
@@ -122,10 +126,61 @@ class RuntimeAdapter:
                 error=str(e)
             )
     
+    # ===== 兼容处理方法 (DCM v3.2) =====
+    
+    def _get_model_name(self, invoke: Dict) -> str:
+        """从 invoke 中获取模型名称
+        
+        兼容两种格式:
+        - model: "qwen2.5:7b" (字符串 - 旧格式)
+        - model: {"name": "qwen2.5:7b", ...} (dict - 新格式)
+        
+        Args:
+            invoke: 执行请求 dict
+            
+        Returns:
+            模型名称字符串
+        """
+        model = invoke.get("model", "qwen2.5:7b")
+        
+        if isinstance(model, dict):
+            return model.get("name", "qwen2.5:7b")
+        elif isinstance(model, str):
+            return model
+        else:
+            return "qwen2.5:7b"
+    
+    def _get_model_family(self, invoke: Dict) -> str:
+        """从 invoke 中获取模型家族
+        
+        兼容两种格式:
+        - model: "qwen2.5:7b" (字符串)
+        - model: {"family": "qwen", ...} (dict)
+        
+        Args:
+            invoke: 执行请求 dict
+            
+        Returns:
+            模型家族名称
+        """
+        model = invoke.get("model", "qwen2.5:7b")
+        
+        if isinstance(model, dict):
+            family = model.get("family", "")
+            if not family:
+                name = model.get("name", "qwen2.5:7b")
+                family = name.split(":")[0] if ":" in name else name
+            return family
+        elif isinstance(model, str):
+            return model.split(":")[0] if ":" in model else model
+        else:
+            return "qwen2.5:7b"
+    
     def _execute_ollama(self, invoke: Dict) -> Dict:
         """执行 Ollama 推理"""
-        model_info = invoke.get("model", {})
-        model_name = model_info.get("name", "qwen2.5:7b")
+        # 使用兼容方法获取模型信息 (DCM v3.2)
+        model_name = self._get_model_name(invoke)
+        model_family = self._get_model_family(invoke)
         
         input_data = invoke.get("input", {})
         messages = input_data.get("messages", [])
@@ -170,8 +225,9 @@ class RuntimeAdapter:
     
     def _execute_openai(self, invoke: Dict) -> Dict:
         """执行 OpenAI 兼容接口 (vLLM/TRT/OpenAI)"""
-        model_info = invoke.get("model", {})
-        model_name = model_info.get("name", "qwen2.5:7b")
+        # 使用兼容方法获取模型信息 (DCM v3.2)
+        model_name = self._get_model_name(invoke)
+        model_family = self._get_model_family(invoke)
         
         input_data = invoke.get("input", {})
         messages = input_data.get("messages", [])

@@ -2,7 +2,7 @@
 
 > A decentralized AI inference marketplace where anyone can buy or sell computing power.
 >
-> **Version**: v3.2 | **Status**: MVP (Production Ready)
+> **Version**: v3.2 | **Status**: MVP | **E2E Tests**: ✅ 10/10 Passed
 
 ---
 
@@ -34,8 +34,8 @@ DCM is a **permissionless AI inference marketplace** that enables:
 │                    └────────────┼────────────┘                   │
 │                                 │                                 │
 │                    ┌────────────▼────────────┐                   │
-│                    │      Polygon Amoy       │                   │
-│                    │   (Smart Contracts)      │                   │
+│                    │      NodeStatusStore   │                   │
+│                    │   (Real-time Status)    │                   │
 │                    └─────────────────────────┘                   │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -48,7 +48,7 @@ DCM is a **permissionless AI inference marketplace** that enables:
 
 ```bash
 # Pull and run
-docker run -p 8000:8000 ghcr.io/yurimeng/dcm:latest
+docker run -p 8000:8000 ghcr.io/yurimeng/dcm:v3.2
 
 # Or use docker-compose
 docker-compose up -d
@@ -60,9 +60,14 @@ docker-compose up -d
 # Clone and install
 git clone https://github.com/yurimeng/DCM.git
 cd DCM
-pip install -r requirements.txt
 
-# Run
+# Start Ollama (required for inference)
+ollama serve &
+ollama pull qwen2.5:7b
+
+# Run DCM
+pip install -r requirements.txt
+rm -f dcm.db  # Reset database
 python -m uvicorn src.main:app --reload
 ```
 
@@ -76,19 +81,17 @@ python -m uvicorn src.main:app --reload
 
 ## 🔧 Core Features
 
-### Job Submission
+### OpenAI Compatible API (v3.2) ✅
+
 ```bash
-# Create a job (model is optional - system assigns best match)
-curl -X POST http://localhost:8000/api/v1/jobs \
+# Create a job using OpenAI-compatible format
+curl -X POST http://localhost:8000/api/v1/jobs/openai \
   -H "Content-Type: application/json" \
   -d '{
-    "user_id": "your-user-id",
-    "model": "qwen2.5:7b",        // optional
-    "prompt": "What is AI?",
-    "input_tokens": 10,
-    "output_tokens_limit": 100,
-    "max_latency": 30000,
-    "bid_price": 0.5
+    "model": "qwen2.5:7b",
+    "messages": [{"role": "user", "content": "What is 1+1?"}],
+    "max_tokens": 100,
+    "temperature": 0.7
   }'
 ```
 
@@ -101,15 +104,14 @@ curl -X POST http://localhost:8000/api/v1/nodes \
     "user_id": "your-user-id",
     "runtime": {
       "type": "ollama",
-      "loaded_models": ["qwen2.5:7b", "llama3:8b"]
+      "loaded_models": ["qwen2.5:7b"]
     },
     "pricing": {
-      "ask_price": 0.01,
-      "avg_latency_ms": 100
+      "ask_price": 0.000001
     },
     "hardware": {
-      "gpu_type": "H100",
-      "vram_gb": 80
+      "gpu_type": "RTX",
+      "gpu_count": 1
     }
   }'
 ```
@@ -118,16 +120,17 @@ curl -X POST http://localhost:8000/api/v1/nodes \
 
 ## 🏗️ Architecture
 
-### Components
+### Components (v3.2)
 
-| Component | Description |
-|-----------|-------------|
-| **API Gateway** | FastAPI-based REST API |
-| **Matching Service** | Job-Node matching engine |
-| **Node Status Store** | Real-time node health tracking |
-| **Job Queue** | Priority queue with retry logic |
-| **Escrow Service** | Payment holding and settlement |
-| **Verification Service** | Result verification (Layer 1/2) |
+| Component | Status | Description |
+|-----------|--------|-------------|
+| **API Gateway** | ✅ | FastAPI-based REST API |
+| **Matching Service** | ✅ | Job-Node matching engine |
+| **NodeStatusStore** | ✅ | Real-time node health tracking |
+| **Job Queue** | ✅ | Priority queue with retry logic |
+| **Escrow Service** | ✅ | Payment holding and settlement |
+| **OpenAI API** | ✅ | OpenAI Chat Completions compatible |
+| **Verification Service** | ⚠️ | Basic validation only |
 
 ### Matching Flow
 
@@ -140,35 +143,89 @@ Job Created → Price Check → Model Match → Latency Check → Capacity Check
                                                      │
                                                      ▼
                                             Match Created
+                                                     │
+                                                     ▼
+                                         Node Poll → Execute → Result
 ```
 
 ---
 
 ## 📊 API Reference
 
-### Endpoints
+### Job API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/jobs/openai` | Create job (OpenAI compatible) ✅ |
+| `POST` | `/api/v1/jobs` | Create job (DCM format) |
+| `GET` | `/api/v1/jobs/{id}` | Get job status |
+| `POST` | `/api/v1/jobs/{id}/submit-result` | Submit result |
+
+### Node API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/nodes` | Register node |
+| `POST` | `/api/v1/nodes/{id}/online` | Node goes online |
+| `POST` | `/api/v1/nodes/{id}/live_status` | Report live status |
+| `POST` | `/api/v1/nodes/{id}/poll` | Poll for jobs |
+| `POST` | `/api/v1/nodes/{id}/execute` | Execute job |
+
+### User API
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/v1/users/register` | Register user |
-| `POST` | `/api/v1/jobs` | Create job |
-| `GET` | `/api/v1/jobs/{id}` | Get job status |
-| `POST` | `/api/v1/nodes` | Register node |
-| `POST` | `/api/v1/nodes/{id}/poll` | Poll for jobs |
-| `POST` | `/api/v1/nodes/{id}/result` | Submit result |
-| `POST` | `/api/v1/nodes/{id}/live_status` | Report live status |
+| `POST` | `/api/v1/users/login` | Login |
 
-### WebSocket (P2P)
+---
 
-```javascript
-// Connect to P2P network
-const ws = new WebSocket('ws://localhost:8000/api/v1/p2p/connect');
+## 🧪 Testing
 
-// Subscribe to jobs
-ws.send(JSON.stringify({
-  type: 'subscribe',
-  channel: 'jobs'
-}));
+### E2E Test Results (v3.2) ✅
+
+```bash
+# Run E2E tests
+python scripts/test_e2e_10_jobs.py
+
+# Results: 10/10 passed
+============================================================
+E2E Test - 10 Jobs Complete Flow
+============================================================
+DCM: http://localhost:8000
+Ollama: http://localhost:11434
+Model: qwen2.5:7b
+============================================================
+
+[TEST 1/10] Math     ✅ Latency: 1447ms, Tokens: 8
+[TEST 2/10] Joke     ✅ Latency: 568ms, Tokens: 24
+[TEST 3/10] Capital  ✅ Latency: 281ms, Tokens: 8
+[TEST 4/10] Definition ✅ Latency: 986ms, Tokens: 50
+[TEST 5/10] List     ✅ Latency: 1018ms, Tokens: 50
+[TEST 6/10] Color    ✅ Latency: 791ms, Tokens: 37
+[TEST 7/10] Science  ✅ Latency: 1016ms, Tokens: 50
+[TEST 8/10] History  ✅ Latency: 1025ms, Tokens: 50
+[TEST 9/10] Math2    ✅ Latency: 388ms, Tokens: 14
+[TEST 10/10] Greeting ✅ Latency: 211ms, Tokens: 4
+
+============================================================
+Passed: 10/10
+🎉 All tests passed!
+```
+
+### Other Tests
+
+```bash
+# Unit tests
+pytest tests/unit/
+
+# Integration tests
+pytest tests/test_phase1.py
+pytest tests/test_phase2.py
+pytest tests/test_phase3_e2e.py
+
+# JobCreate format tests
+python scripts/test_job_create_10.py  # 10/10 passed
 ```
 
 ---
@@ -178,12 +235,10 @@ ws.send(JSON.stringify({
 ### Pricing Model
 
 ```
-Final Cost = Node Ask Price × Output Tokens
+All prices in USDC per token
 
-Example:
-- Node ask_price: 0.01 USDC/1M tokens
-- Output tokens: 50
-- Cost: 0.01 × 50 = 0.0005 USDC
+Default bid_price: 0.000001 (1 USDC/1M tokens)
+Default max_latency: 30000ms
 ```
 
 ### Fee Distribution
@@ -192,12 +247,6 @@ Example:
 |-------|-------|
 | Node Operator | 95% |
 | Platform | 5% |
-
-### Escrow Flow
-
-1. **Lock**: Bid amount + buffer held on job creation
-2. **Settle**: Node payment transferred on completion
-3. **Refund**: Excess returned to buyer
 
 ---
 
@@ -210,95 +259,35 @@ Example:
 | **Layer 1** | Every job | Basic validation |
 | **Layer 2** | 10% random | Deep verification |
 
-### Stake System
-
-Nodes must stake to participate:
-- **Personal**: < 4 GPUs → 50 USDC
-- **Professional**: 4-7 GPUs → 200 USDC
-- **Datacenter**: 8+ GPUs → 1000 USDC
-
 ---
 
-## 🚀 Deployment
+## 📈 Version History
 
-### Render (Recommended)
-
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
-
-```bash
-# Manual deploy
-render deploy --service dcm-api
-```
-
-### Local Development
-
-```bash
-# Start all services
-docker-compose up -d
-
-# Run tests
-pytest tests/
-
-# Run with coverage
-pytest --cov=src tests/
-```
-
----
-
-## 📈 Performance
-
-### Benchmark Results (10min Stress Test)
-
-| Metric | Value |
-|--------|-------|
-| Jobs Created | 402 |
-| Jobs Completed | 93 |
-| Completion Rate | 23.13% |
-| Avg Latency | ~500ms |
-
-### Scalability
-
-- **Horizontal**: Add more nodes
-- **Vertical**: Increase GPU count per node
-- **Concurrent**: Increase `max_concurrency` setting
-
----
-
-## 🧪 Testing
-
-```bash
-# Unit tests
-pytest tests/unit/
-
-# Integration tests
-pytest tests/test_phase1.py
-pytest tests/test_phase2.py
-pytest tests/test_phase3_e2e.py
-
-# Stress test
-python test_batch.py
-
-# Local Ollama test
-python tests/test_ollama_integration.py
-```
+| Version | Date | Status | Notes |
+|---------|------|--------|-------|
+| 3.0 | 2026-04-12 | ✅ | Basic Match Engine |
+| 3.1 | 2026-04-13 | ✅ | Pre-Lock, Slot abstraction |
+| **3.2** | 2026-04-15 | **✅ MVP** | OpenAI API, NodeStatusStore, E2E passed |
 
 ---
 
 ## 📝 Documentation
 
-- [API Documentation](docs/)
-- [Function Specifications](Function/)
-- [Match Engine Architecture](docs/Match-Engine-Architecture.md)
-- [Changelog](CHANGELOG.md)
+- [Architecture](DCM/docs/DCM-v3.2-Architecture.md)
+- [Match Engine](DCM/Match Engine v3.2 架构.md)
+- [OpenAI API](CreateJob API.md)
+- [Function Index](DCM/Function/Function 模块索引.md)
 
 ---
 
 ## 🤝 Contributing
 
+> **v3.2 MVP Status**: This version is feature-frozen. Only bug fixes will be accepted.
+
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing`)
+2. Create a bugfix branch (`git checkout -b fix/bug-description`)
+3. Commit changes (`git commit -m 'Fix: bug description'`)
+4. Push to branch (`git push origin fix/bug-description`)
 5. Open a Pull Request
 
 ---
@@ -323,6 +312,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 Built with:
 - [FastAPI](https://fastapi.tiangolo.com/)
 - [SQLAlchemy](https://www.sqlalchemy.org/)
-- [Polygon](https://polygon.technology/)
 - [Ollama](https://ollama.ai/)
-# Force redeploy

@@ -55,21 +55,25 @@ def _load_matching_state():
         ).all()
         
         for db_node in online_nodes:
+            # 解析 runtime JSON
+            runtime_data = json.loads(db_node.runtime) if isinstance(db_node.runtime, str) else db_node.runtime
+            model_support = json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else (db_node.model_support or [])
+            
             node = Node(
                 node_id=db_node.node_id,
                 gpu_type=db_node.gpu_type,
                 vram_gb=db_node.vram_gb,
                 gpu_count=db_node.gpu_count,
                 # Required: runtime and model
-                runtime=db_node.runtime,
+                runtime=runtime_data,
                 model=db_node.model,
-                model_support=json.loads(db_node.model_support) if db_node.model_support else [],
+                model_support=model_support,
                 ask_price=float(db_node.ask_price),
                 avg_latency=int(db_node.avg_latency),
                 region=db_node.region,
                 status=NodeStatus.ONLINE,
             )
-            matching_service.register_node(node)
+            # 节点已通过 online API 注册到 NodeStatusStore，这里不需要重复注册
             print(f"  Loaded online node: {db_node.node_id[:8]}...")
         
         # 加载 pending jobs
@@ -80,17 +84,21 @@ def _load_matching_state():
         for db_job in pending_jobs:
             # 处理 model 字段（可能为 None）- 使用 model_requirement
             model_req = db_job.model or "generic"
-            job = Job(
-                model_requirement=model_req,
-                input_tokens=db_job.input_tokens or 100,
-                output_tokens_limit=db_job.output_tokens_limit or 512,
-                max_latency=db_job.max_latency or 30000,
-                bid_price=float(db_job.bid_price) if db_job.bid_price else 0.001,
-            )
-            job.job_id = db_job.job_id
-            job.status = JobStatus.PENDING
-            matching_service.add_job(job)
-            print(f"  Loaded pending job: {db_job.job_id[:8]}...")
+            try:
+                job = Job(
+                    user_id=db_job.user_id or "anonymous",
+                    model_requirement=model_req,
+                    input_tokens=db_job.input_tokens or 100,
+                    output_tokens_limit=db_job.output_tokens_limit or 512,
+                    max_latency=db_job.max_latency or 30000,
+                    bid_price=float(db_job.bid_price) if db_job.bid_price else 0.001,
+                )
+                job.job_id = db_job.job_id
+                job.status = JobStatus.PENDING
+                matching_service.add_job(job)
+                print(f"  Loaded pending job: {db_job.job_id[:8]}...")
+            except Exception as e:
+                print(f"  Failed to load job {db_job.job_id[:8]}...: {e}")
         
         print(f"Matching state loaded: {len(online_nodes)} nodes, {len(pending_jobs)} jobs")
         
