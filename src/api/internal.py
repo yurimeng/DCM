@@ -1032,3 +1032,40 @@ async def db_check_table(table: str, db: Session = Depends(get_db)):
     index_list = [{"name": row[1]} for row in indexes]
     
     return {"table": table, "columns": columns, "indexes": index_list}
+
+@router.post("/debug/node-login")
+async def debug_node_login(
+    node_id: str,
+    user_id: str,
+    db: Session = Depends(get_db)
+):
+    """调试: 模拟 node_login"""
+    from ..repositories import UserRepository, NodeRepository
+    import traceback
+    
+    result = {}
+    
+    # 1. Check user
+    try:
+        user_repo = UserRepository(db)
+        is_valid, user_db, error_msg = user_repo.validate_user_id(user_id)
+        result["user_valid"] = is_valid
+        result["user_error"] = error_msg
+    except Exception as e:
+        result["user_error"] = str(e)
+        return {"error": result}
+    
+    # 2. Check node
+    try:
+        node_repo = NodeRepository(db)
+        db_node = node_repo.get(node_id)
+        result["node_found"] = db_node is not None
+        if db_node:
+            result["node_user_id"] = db_node.user_id
+            result["node_cluster_id"] = db_node.cluster_id
+            result["node_runtime"] = db_node.runtime
+    except Exception as e:
+        result["node_error"] = str(e)
+        result["node_trace"] = traceback.format_exc()
+    
+    return result
