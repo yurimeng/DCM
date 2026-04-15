@@ -188,6 +188,7 @@ class NodeAgent:
                         "type": "ollama",
                         "loaded_models": [self.model],
                     },
+                    "user_id": self.capability.get("user_id", ""),
                     "ask_price": self.capability.get("ask_price", 0.001),
                     "avg_latency": self.capability.get("avg_latency", 100),
                     "gpu_count": self.capability.get("gpu_count", 1),

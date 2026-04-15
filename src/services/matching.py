@@ -135,92 +135,143 @@ class MatchingService:
         """
         节点拉取时触发撮合
         
-        从 NodeStatusStore 获取节点状态和容量信息
+        只依赖 NodeStatusStore，不查询 DB
         """
-        # 查找该节点是否已被匹配
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # ═══════════════════════════════════════════════════════════════
+        # 第一步: 检查节点是否已被匹配
+        # ═══════════════════════════════════════════════════════════════
+        
         if node_id in self._node_jobs:
             match_id = self._node_jobs[node_id]
+            logger.info(f"[POLL] Node {node_id[:16]} already matched: {match_id}")
             return self._matches.get(match_id)
         
-        # 从 NodeStatusStore 检查节点是否在线（使用新的 get_node_info API）
+        # ═══════════════════════════════════════════════════════════════
+        # 第二步: 从 NodeStatusStore 检查节点是否在线
+        # ═══════════════════════════════════════════════════════════════
+        
         from .node_status_store import get_node_info
         node_info = get_node_info(node_id)
-        if not node_info.is_online:
+        
+        if not node_info:
+            logger.info(f"[POLL] Node {node_id[:16]} not in NodeStatusStore")
             return None
         
-        # 从 NodeStatusStore 获取实时状态
+        if not node_info.is_online:
+            logger.info(f"[POLL] Node {node_id[:16]} is offline")
+            return None
+        
+        logger.info(f"[POLL] Node {node_id[:16]} is online: model_support={node_info.model_support}, ask={node_info.ask_price}")
+        
+        # ═══════════════════════════════════════════════════════════════
+        # 第三步: 获取节点实时状态
+        # ═══════════════════════════════════════════════════════════════
+        
         node_status = node_status_store.get_node_status(node_id)
         
-        # 从 DB 获取节点信息
-        from ..database import SessionLocal
-        from ..repositories import NodeRepository
-        db = SessionLocal()
-        try:
-            node_repo = NodeRepository(db)
-            db_node = node_repo.get(node_id)
-            if not db_node:
-                return None
-            
-            # 构建 Node 对象（用于匹配检查）
-            import json
-            runtime_data = json.loads(db_node.runtime) if isinstance(db_node.runtime, str) else {}
-            model_support = json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else []
-            
-            node = Node(
-                node_id=db_node.node_id,
-                user_id=db_node.user_id,
-                runtime=runtime_data or {'type': 'ollama', 'loaded_models': []},
-                hardware={'gpu_type': db_node.gpu_type, 'gpu_count': db_node.gpu_count},
-                reliability={'avg_latency_ms': db_node.avg_latency, 'success_rate': 0.95, 'quality_score': 0.9},
-                pricing={'ask_price_usdc_per_mtoken': db_node.ask_price},
-                location={'region': db_node.region},
-            )
-            # 设置实时容量（从 NodeStatusStore）
-            node.state.available_concurrency = node_status.get('available_concurrency', 1)
-            node.state.available_queue_tokens = node_status.get('available_queue_tokens', 1500)
-        finally:
-            db.close()
+        # ═══════════════════════════════════════════════════════════════
+        # 第四步: 从 NodeStatusStore 构建 Node 对象
+        # ═══════════════════════════════════════════════════════════════
         
-        # 从 Queue 获取待匹配 Jobs
+        # 从 raw_data 获取 user_id
+        user_id = ""
+        if node_info.raw_data:
+            user_id = node_info.raw_data.get("user_id", "")
+        
+        # 提取 region from cluster_id (格式: C_usw_P_Q_A_3f2e)
+        region = "unknown"
+        if node_info.cluster_id:
+            parts = node_info.cluster_id.split("_")
+            if len(parts) >= 2:
+                region = parts[1][:3] if len(parts[1]) >= 3 else parts[1]
+        
+        # 构建 Node 对象 (只从 NodeStatusStore 获取数据)
+        node = Node(
+            node_id=node_info.node_id,
+            user_id=user_id,
+            runtime={
+                'type': 'ollama',
+                'loaded_models': node_info.model_support or []
+            },
+            hardware={
+                'gpu_type': node_info.raw_data.get('gpu_type', 'unknown') if node_info.raw_data else 'unknown',
+                'gpu_count': node_info.gpu_count or 1
+            },
+            reliability={
+                'avg_latency_ms': node_info.avg_latency or 100,
+                'success_rate': 0.95,
+                'quality_score': 0.9
+            },
+            pricing={
+                'ask_price_usdc_per_mtoken': node_info.ask_price or 0.001
+            },
+            location={'region': region},
+        )
+        
+        # 设置实时容量
+        node.state.available_concurrency = node_status.get('available_concurrency', 1)
+        node.state.available_queue_tokens = node_status.get('available_queue_tokens', 1500)
+        
+        # ═══════════════════════════════════════════════════════════════
+        # 第五步: 从 Queue 获取待匹配 Jobs
+        # ═══════════════════════════════════════════════════════════════
+        
         pending_jobs_data = self.queue.get_pending_jobs()
+        
         if not pending_jobs_data:
+            logger.info(f"[POLL] No pending jobs")
             return None
         
-        # 分离：通用任务 和 指定模型任务
-        # 过滤掉已经匹配的 Job
+        # 分离: 指定模型任务 和 通用任务
         generic_jobs = []
         model_jobs = []
+        
         for job_data in pending_jobs_data:
             job = Job(**job_data)
+            
             # 跳过已匹配的 Job
             if job.job_id in self._job_to_match:
                 continue
+            
             if not job.model:
                 generic_jobs.append(job)
             else:
                 model_jobs.append(job)
         
-        # 1. 先处理指定模型的 Jobs
+        logger.info(f"[POLL] Pending jobs: {len(model_jobs)} model jobs, {len(generic_jobs)} generic jobs")
+        
+        # ═══════════════════════════════════════════════════════════════
+        # 第六步: 匹配
+        # ═══════════════════════════════════════════════════════════════
+        
+        # 先处理指定模型的 Jobs
         for job in model_jobs:
             if self._can_match(job, node, node_status):
+                logger.info(f"[POLL] Matched model job: {job.job_id}")
                 match = self._create_match(job, node)
                 if match:
                     self.queue.acknowledge(job.job_id)
                     return match
         
-        # 2. 再处理通用 Jobs
+        # 再处理通用 Jobs (按评分排序)
         if generic_jobs:
             sorted_generic = sorted(
                 generic_jobs,
                 key=lambda j: (-self._get_match_score(j, node), j.created_at)
             )
+            
             for job in sorted_generic:
                 if self._can_match(job, node, node_status):
+                    logger.info(f"[POLL] Matched generic job: {job.job_id}")
                     match = self._create_match(job, node)
                     if match:
                         self.queue.acknowledge(job.job_id)
                         return match
         
+        logger.info(f"[POLL] No job matched for node {node_id[:16]}")
         return None
     
     def get_match(self, match_id: str) -> Optional[Match]:
