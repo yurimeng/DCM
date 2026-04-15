@@ -151,7 +151,7 @@ class NodeAgent:
             logger.error(f"上线失败: {e}")
     
     def heartbeat(self):
-        """发送心跳并处理 re_register"""
+        """发送 live_status (每 3 秒)"""
         try:
             resp = requests.post(
                 f"{self.dcm_url}/api/v1/nodes/{self.node_id}/live_status",
@@ -159,13 +159,6 @@ class NodeAgent:
                     "timestamp": int(time.time() * 1000),
                     "status": {
                         "status": "online",
-                        "model_support": [self.model],
-                        "ask_price": self.capability.get("ask_price", 0.001),
-                        "avg_latency": self.capability.get("avg_latency", 100),
-                        "gpu_count": self.capability.get("gpu_count", 1),
-                        "gpu_type": self.capability.get("gpu_type", "RTX"),
-                        "vram_used_gb": 8.0,
-                        "vram_total_gb": self.capability.get("vram_gb", 24),
                     },
                     "capacity": {
                         "max_concurrency_total": 2,
@@ -178,32 +171,40 @@ class NodeAgent:
                 },
                 timeout=5
             )
-            
-            if resp.status_code == 404:
-                # 节点不存在，重新注册
-                logger.warning(f"节点 {self.node_id} 不存在，重新注册")
-                if self.register_new_node():
-                    self.ensure_online()
-                return None
-            
+            return resp.status_code == 200
+        except Exception as e:
+            logger.error(f"live_status 失败: {e}")
+            return False
+    
+    def send_capacity_report(self):
+        """发送 capacity_report (每 90 秒)"""
+        try:
+            resp = requests.post(
+                f"{self.dcm_url}/api/v1/nodes/{self.node_id}/capacity_report",
+                json={
+                    "timestamp": int(time.time() * 1000),
+                    "runtime": {
+                        "type": "ollama",
+                        "loaded_models": [self.model],
+                    },
+                    "ask_price": self.capability.get("ask_price", 0.001),
+                    "avg_latency": self.capability.get("avg_latency", 100),
+                    "gpu_count": self.capability.get("gpu_count", 1),
+                    "capacity": {
+                        "max_concurrency_total": 2,
+                    },
+                },
+                timeout=10
+            )
             if resp.status_code == 200:
                 result = resp.json()
-                
-                # 检查是否需要重新注册
-                if result.get("re_register"):
-                    logger.warning("服务端要求重新注册节点")
-                    if self.register_new_node():
-                        self.ensure_online()
-                
-                # 检查是否匹配成功
-                if not result.get("matched"):
-                    logger.debug("节点未在 matching_service 中")
-                
-                return result
-            return None
+                if result.get("new_cluster_id"):
+                    logger.info(f"Cluster ID: {result['new_cluster_id']}")
+            logger.debug("capacity_report sent")
+            return True
         except Exception as e:
-            logger.error(f"心跳失败: {e}")
-            return None
+            logger.warning(f"capacity_report 失败: {e}")
+            return False
     
     def poll_job(self):
         """轮询 Job - 返回完整的 invoke 结构"""
@@ -309,15 +310,21 @@ class NodeAgent:
         self.ensure_online()
         
         heartbeat_count = 0
+        capacity_count = 0
         processed_jobs = set()
         
         while True:
             try:
-                # 心跳
+                # live_status (每 3 秒)
                 heartbeat_count += 1
                 if heartbeat_count % 10 == 0:
                     self.heartbeat()
                     heartbeat_count = 0
+                
+                # capacity_report (每 90 秒，约 30 次心跳)
+                capacity_count += 1
+                if capacity_count % 30 == 0:
+                    self.send_capacity_report()
                 
                 # 轮询 Job
                 invoke = self.poll_job()

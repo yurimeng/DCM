@@ -498,78 +498,79 @@ class DCMNodeAgent:
     
     def heartbeat(self) -> bool:
         """
-        Send heartbeat to server (with user authentication)
-        发送心跳到服务器（带用户身份验证）
+        Send live_status and periodic capacity_report
+        发送 live_status 和定期 capacity_report
         """
         if not self.config.node_id:
             return False
         
         try:
-            # Build heartbeat payload with user_id for authentication
-            # 构建心跳载荷，包含 user_id 用于身份验证
-            heartbeat_payload = {
-                "status": "idle",
-                "user_id": self.config.user_id,  # User authentication / 用户身份验证
+            # Increment report counter
+            self._report_count = getattr(self, '_report_count', 0) + 1
+            
+            # === live_status (every call, ~3 seconds) ===
+            live_status = {
+                "timestamp": int(time.time() * 1000),
+                "status": {
+                    "status": "online",
+                },
+                "capacity": {
+                    "max_concurrency_total": self.config.slot_count,
+                    "max_concurrency_available": self.config.slot_count,
+                },
+                "load": {
+                    "active_jobs": 0,
+                    "available_token_capacity": 1500,
+                },
             }
             
             resp = requests.post(
-                f"{self.config.dcm_url}/api/v1/nodes/{self.config.node_id}/heartbeat",
-                json=heartbeat_payload,
+                f"{self.config.dcm_url}/api/v1/nodes/{self.config.node_id}/live_status",
+                json=live_status,
                 timeout=10
             )
             
-            if resp.status_code == 200:
-                data = resp.json()
+            if resp.status_code != 200:
+                logger.warning(f"live_status failed: {resp.status_code}")
+            
+            # === capacity_report (every 30 calls, ~90 seconds) ===
+            if self._report_count % 30 == 0:
+                capacity_report = {
+                    "timestamp": int(time.time() * 1000),
+                    "runtime": {
+                        "type": self.config.runtime,
+                        "loaded_models": [self.config.model],
+                    },
+                    "ask_price": 0.001,
+                    "avg_latency": 200,
+                    "gpu_count": self.config.gpu_count,
+                    "capacity": {
+                        "max_concurrency_total": self.config.slot_count,
+                    },
+                }
                 
-                # Check if user is disabled
-                # 检查用户是否被禁用
-                if data.get("user_disabled"):
-                    logger.error("User account is disabled! Stopping heartbeat.")
-                    self.running = False
-                    return False
+                resp = requests.post(
+                    f"{self.config.dcm_url}/api/v1/nodes/{self.config.node_id}/capacity_report",
+                    json=capacity_report,
+                    timeout=10
+                )
                 
-                # Parse heartbeat data / 解析心跳数据
-                node_status = data.get("status", "unknown")
-                matched = data.get("matched", False)
-                pre_lock_jobs = data.get("pre_lock_jobs", [])
-                pre_lock_count = data.get("pre_lock_count", 0)
-                timestamp = data.get("timestamp", 0)
-                
-                # Update network state / 更新网络状态
-                self.network.current_state = NetworkState.ONLINE
-                
-                # Process Pre-lock Jobs / 处理 Pre-lock Jobs
-                for job in pre_lock_jobs:
-                    job_id = job.get("job_id")
-                    expires_at = job.get("pre_lock_expires_at")
-                    if job_id and self._prelock_ack(job_id):
-                        logger.info(f"Pre-lock ACK success: {job_id[:12]}...")
-                    else:
-                        logger.warning(f"Pre-lock ACK failed: {job_id[:12]}...")
-                
-                # Log heartbeat / 记录心跳
-                self._heartbeat_count = getattr(self, '_heartbeat_count', 0) + 1
-                if self._heartbeat_count % 3 == 0:
-                    logger.info(f"Heartbeat #{self._heartbeat_count} | user={self.config.user_id[:8]}... | status={node_status} | matched={matched} | pre_lock={pre_lock_count}")
-                    
-                    if pre_lock_jobs:
-                        for job in pre_lock_jobs:
-                            logger.info(f"   Pre-lock: {job['job_id'][:12]}... | prompt={job.get('prompt', 'N/A')[:20]}... | expires={job.get('pre_lock_expires_at', 'N/A')}")
-                
-                return True
-            else:
-                error_msg = resp.text
-                logger.warning(f"Heartbeat failed: {resp.status_code} - {error_msg}")
-                
-                # Check for user disabled error
-                if "disabled" in error_msg.lower():
-                    logger.error("User account is disabled! Stopping node.")
-                    self.running = False
-                
-                return False
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("new_cluster_id"):
+                        logger.info(f"Cluster ID: {data['new_cluster_id']}")
+                    logger.debug("capacity_report sent")
+                else:
+                    logger.warning(f"capacity_report failed: {resp.status_code}")
+            
+            # Log heartbeat / 记录心跳
+            if self._report_count % 10 == 0:
+                logger.info(f"Status report #{self._report_count} | user={self.config.user_id[:8]}...")
+            
+            return True
         
         except Exception as e:
-            logger.error(f"Heartbeat exception: {e}")
+            logger.error(f"Status report exception: {e}")
             return False
     
     def _prelock_ack(self, job_id: str) -> bool:
