@@ -76,7 +76,9 @@ async def create_job(
         
         # 4. 触发撮合（同步到内存服务）
         matching_service.add_job(job)
+        logger.info(f"[MATCH DEBUG] Job {job.job_id} added to matching service")
         match = matching_service.trigger_match(job.job_id)
+        logger.info(f"[MATCH DEBUG] trigger_match result: {match}")
         
         if match:
             # 更新 Job 状态（不自动 commit）

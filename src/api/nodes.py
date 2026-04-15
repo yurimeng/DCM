@@ -313,12 +313,12 @@ async def poll_job(
     # 更新心跳
     node_repo.update_heartbeat(node_id)
     
-    # 检查节点是否在线（基于 10 秒内的 live_status）
-    from ..services.node_status_store import node_status_store
-    is_recent = node_status_store.is_online(node_id, max_age_seconds=10)
+    # 检查节点是否在线（使用新的 list_nodes API）
+    from ..services.node_status_store import get_node_info
+    node_info = get_node_info(node_id)
     
-    # DB 状态为 ONLINE 且最近有 live_status 报告则视为在线
-    if db_node.status != NodeStatusDB.ONLINE and not is_recent:
+    # DB 状态为 ONLINE 且节点在 NodeStatusStore 中在线才处理
+    if db_node.status != NodeStatusDB.ONLINE and not node_info.is_online:
         return NodePollResponse(has_job=False)
     
     # 触发撮合（内存服务）
@@ -718,9 +718,10 @@ async def node_heartbeat(
         node_repo.update(node_id, **update_fields)
         logger.info(f"Node {node_id} updated via heartbeat: {list(update_fields.keys())}")
     
-    # 检查节点是否在 NodeStatusStore 中（无需手动注册）
-    from ..services.node_status_store import node_status_store
-    is_online = node_status_store.is_online(node_id, max_age_seconds=10)
+    # 检查节点是否在 NodeStatusStore 中（使用新的 get_node_info API）
+    from ..services.node_status_store import get_node_info
+    node_info = get_node_info(node_id)
+    is_online = node_info.is_online
     re_register = not is_online and db_node.status == NodeStatusDB.ONLINE
     
     # 获取 Pre-lock Jobs (通过 matching_service)

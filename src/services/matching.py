@@ -135,9 +135,10 @@ class MatchingService:
             match_id = self._node_jobs[node_id]
             return self._matches.get(match_id)
         
-        # 从 NodeStatusStore 检查节点是否在线（10秒内有更新）
-        from .node_status_store import node_status_store
-        if not node_status_store.is_online(node_id, max_age_seconds=10):
+        # 从 NodeStatusStore 检查节点是否在线（使用新的 get_node_info API）
+        from .node_status_store import get_node_info
+        node_info = get_node_info(node_id)
+        if not node_info.is_online:
             return None
         
         # 从 NodeStatusStore 获取实时状态
@@ -253,10 +254,14 @@ class MatchingService:
             node_repo = NodeRepository(db)
             all_nodes = node_repo.list_all()  # 需要实现 list_all
             
-            # 筛选在线节点（通过 NodeStatusStore 检查）
+            # 筛选在线节点（使用新的 list_online_nodes API）
+            from .node_status_store import list_online_nodes
+            online_nodes = list_online_nodes(max_age_seconds=10)
+            online_node_ids = {n.node_id for n in online_nodes}
+            
             candidates = []
             for db_node in all_nodes:
-                if not node_status_store.is_online(db_node.node_id, max_age_seconds=10):
+                if db_node.node_id not in online_node_ids:
                     continue
                 
                 node_status = node_status_store.get_node_status(db_node.node_id)
