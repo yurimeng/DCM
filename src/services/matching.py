@@ -242,6 +242,10 @@ class MatchingService:
     
     def _match(self, job: Job) -> Optional[Match]:
         """执行撮合逻辑（从 NodeStatusStore 获取节点列表）"""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[MATCH DEBUG] _match() called for job {job.job_id}")
+        
         from .node_status_store import node_status_store
         
         # 从 DB 获取所有在线节点（通过 NodeStatusStore 检查在线状态）
@@ -259,15 +263,23 @@ class MatchingService:
             online_nodes = list_online_nodes(max_age_seconds=10)
             online_node_ids = {n.node_id for n in online_nodes}
             
+            logger.info(f"[MATCH DEBUG] Total DB nodes: {len(all_nodes)}")
+            logger.info(f"[MATCH DEBUG] Online nodes from NodeStatusStore: {len(online_nodes)}")
+            logger.info(f"[MATCH DEBUG] Online node IDs: {[n.node_id[:20] for n in online_nodes]}")
+            
             candidates = []
             for db_node in all_nodes:
-                if db_node.node_id not in online_node_ids:
+                in_online = db_node.node_id in online_node_ids
+                logger.info(f"[MATCH DEBUG] Node {db_node.node_id[:20]}... in_online={in_online}")
+                
+                if not in_online:
                     continue
                 
                 node_status = node_status_store.get_node_status(db_node.node_id)
                 
                 runtime_data = json.loads(db_node.runtime) if isinstance(db_node.runtime, str) else {}
                 model_support = json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else []
+                logger.info(f"[MATCH DEBUG] Node model_support: {model_support}, job.model: {job.model}")
                 
                 node = Node(
                     node_id=db_node.node_id,
@@ -281,12 +293,18 @@ class MatchingService:
                 node.state.available_concurrency = node_status.get('available_concurrency', 1)
                 node.state.available_queue_tokens = node_status.get('available_queue_tokens', 1500)
                 
-                if self._can_match(job, node, node_status):
+                can_match = self._can_match(job, node, node_status)
+                logger.info(f"[MATCH DEBUG] _can_match result: {can_match}")
+                
+                if can_match:
                     candidates.append(node)
         finally:
             db.close()
         
+        logger.info(f"[MATCH DEBUG] Total candidates: {len(candidates)}")
+        
         if not candidates:
+            logger.info(f"[MATCH DEBUG] No candidates found, returning None")
             return None
         
         # 策略：最低 ask_price 优先
