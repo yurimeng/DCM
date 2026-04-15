@@ -251,9 +251,16 @@ async def node_login(
         runtime_data = json.loads(db_node.runtime) if isinstance(db_node.runtime, str) else {}
         models = runtime_data.get('loaded_models', [])
         
+        stake_tier = "personal"
+        if db_node.stake_tier:
+            if hasattr(db_node.stake_tier, 'value'):
+                stake_tier = db_node.stake_tier.value
+            elif isinstance(db_node.stake_tier, str):
+                stake_tier = db_node.stake_tier
+        
         new_cluster_id = build_cluster_id(
             region=db_node.region or "unknown",
-            stake_tier=db_node.stake_tier.value if hasattr(db_node.stake_tier, 'value') else "personal",
+            stake_tier=stake_tier,
             models=models,
             quality_score=0.9,
             success_rate=0.95,
