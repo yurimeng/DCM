@@ -247,91 +247,108 @@ class MatchingService:
                         break
         return prelock_jobs
     
+    def _get_model_family(self, model_name: str) -> str:
+        """从模型名提取 family
+        
+        Examples:
+            - "qwen2.5:7b" → "qwen"
+            - "llama3:8b" → "llama"
+            - "gemma:2b" → "gemma"
+        """
+        model_lower = model_name.lower()
+        for family in ["qwen", "llama", "gemma", "mistral", "phi", "codellama"]:
+            if family in model_lower:
+                return family
+        return model_name.split(":")[0] if ":" in model_name else model_name
+    
     def _match(self, job: Job) -> Optional[Match]:
-        """执行撮合逻辑（从 NodeStatusStore 获取节点列表）"""
+        """执行撮合逻辑（两阶段分层匹配）
+        
+        第一阶段: Cluster 分配
+        - 从 NodeStatusStore 获取在线节点
+        - 按 model_family 过滤
+        
+        第二阶段: Node 选择
+        - 按价格排序
+        - 选择最优节点
+        """
         import logging
         logger = logging.getLogger(__name__)
-        logger.info(f"[MATCH DEBUG] _match() called for job {job.job_id}")
+        logger.info(f"[MATCH DEBUG] _match() called for job {job.job_id}, model={job.model}")
         
-        from .node_status_store import node_status_store
+        from .node_status_store import list_online_nodes, node_status_store
         
-        # 从 DB 获取所有在线节点（通过 NodeStatusStore 检查在线状态）
-        from ..database import SessionLocal
-        from ..repositories import NodeRepository
-        import json
+        # 第一阶段: 获取在线节点
+        online_nodes = list_online_nodes(max_age_seconds=10)
+        logger.info(f"[MATCH DEBUG] Online nodes: {len(online_nodes)}")
         
-        db = SessionLocal()
-        try:
-            node_repo = NodeRepository(db)
-            all_nodes = node_repo.list_all()  # 需要实现 list_all
-            
-            # 筛选在线节点（使用新的 list_online_nodes API）
-            from .node_status_store import list_online_nodes
-            online_nodes = list_online_nodes(max_age_seconds=10)
-            online_node_ids = {n.node_id for n in online_nodes}
-            
-            logger.info(f"[MATCH DEBUG] Total DB nodes: {len(all_nodes)}")
-            logger.info(f"[MATCH DEBUG] Online nodes from NodeStatusStore: {len(online_nodes)}")
-            logger.info(f"[MATCH DEBUG] Online node IDs: {[n.node_id[:20] for n in online_nodes]}")
-            
-            candidates = []
-            for db_node in all_nodes:
-                in_online = db_node.node_id in online_node_ids
-                logger.info(f"[MATCH DEBUG] Node {db_node.node_id[:20]}... in_online={in_online}")
-                
-                if not in_online:
-                    continue
-                
-                node_status = node_status_store.get_node_status(db_node.node_id)
-                
-                # Parse runtime_data safely (handle both JSON and plain strings)
-                runtime_str = db_node.runtime if isinstance(db_node.runtime, str) else str(db_node.runtime)
-                try:
-                    runtime_data = json.loads(runtime_str) if runtime_str.startswith('{') else {'type': runtime_str, 'loaded_models': []}
-                except json.JSONDecodeError:
-                    runtime_data = {'type': runtime_str or 'ollama', 'loaded_models': []}
-                
-                # Parse model_support safely (PRIORITY: use db_node.model_support, fallback to runtime_data)
-                try:
-                    model_support = json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else []
-                except json.JSONDecodeError:
-                    model_support = []
-                
-                # Fallback: if model_support is still empty, try to get from runtime_data
-                if not model_support and runtime_data.get('loaded_models'):
-                    model_support = runtime_data.get('loaded_models', [])
-                
-                logger.info(f"[MATCH DEBUG] Node model_support: {model_support}, job.model: {job.model}")
-                
-                node = Node(
-                    node_id=db_node.node_id,
-                    user_id=db_node.user_id or '',
-                    runtime={'type': runtime_data.get('type', 'ollama'), 'loaded_models': model_support},
-                    hardware={'gpu_type': db_node.gpu_type or 'unknown', 'gpu_count': db_node.gpu_count or 1},
-                    reliability={'avg_latency_ms': db_node.avg_latency or 100, 'success_rate': 0.95, 'quality_score': 0.9},
-                    pricing={'ask_price_usdc_per_mtoken': db_node.ask_price or 0.001},
-                    location={'region': db_node.region or 'unknown'},
-                )
-                node.state.available_concurrency = node_status.get('available_concurrency', 1)
-                node.state.available_queue_tokens = node_status.get('available_queue_tokens', 1500)
-                
-                can_match = self._can_match(job, node, node_status)
-                logger.info(f"[MATCH DEBUG] _can_match result: {can_match}")
-                
-                if can_match:
-                    candidates.append(node)
-        finally:
-            db.close()
-        
-        logger.info(f"[MATCH DEBUG] Total candidates: {len(candidates)}")
-        
-        if not candidates:
-            logger.info(f"[MATCH DEBUG] No candidates found, returning None")
+        if not online_nodes:
+            logger.info(f"[MATCH DEBUG] No online nodes")
             return None
         
-        # 策略：最低 ask_price 优先
+        # 解析 job 需要的 tokens
+        job_tokens = job.input_tokens + job.output_tokens_limit
+        logger.info(f"[MATCH DEBUG] job_tokens={job_tokens}")
+        
+        # 价格统一到 per-1M-tokens
+        job_price_per_m = job.bid_price * 1_000_000
+        
+        candidates = []
+        for node_info in online_nodes:
+            # 容量检查
+            if node_info.available_queue_tokens < job_tokens:
+                logger.info(f"[MATCH DEBUG] Node {node_info.node_id[:16]} capacity fail: {node_info.available_queue_tokens} < {job_tokens}")
+                continue
+            
+            # 模型匹配
+            if job.model:
+                # 精确匹配或前缀匹配
+                model_match = False
+                for supported in node_info.model_support:
+                    if supported == job.model or job.model.startswith(supported) or supported.startswith(job.model):
+                        model_match = True
+                        break
+                if not model_match:
+                    logger.info(f"[MATCH DEBUG] Node {node_info.node_id[:16]} model mismatch: {node_info.model_support}")
+                    continue
+            
+            # 价格检查 (job per-token * 1M >= node per-1M-tokens)
+            if job_price_per_m < node_info.ask_price:
+                logger.info(f"[MATCH DEBUG] Node {node_info.node_id[:16]} price fail: {job_price_per_m} < {node_info.ask_price}")
+                continue
+            
+            # 延迟检查
+            if node_info.avg_latency > job.max_latency:
+                logger.info(f"[MATCH DEBUG] Node {node_info.node_id[:16]} latency fail: {node_info.avg_latency} > {job.max_latency}")
+                continue
+            
+            logger.info(f"[MATCH DEBUG] Node {node_info.node_id[:16]} is candidate: ask={node_info.ask_price}, lat={node_info.avg_latency}")
+            candidates.append(node_info)
+        
+        logger.info(f"[MATCH DEBUG] Candidates: {len(candidates)}")
+        
+        if not candidates:
+            return None
+        
+        # 第二阶段: 按价格排序，选择最优节点
         candidates.sort(key=lambda n: (n.ask_price, n.avg_latency))
-        return self._create_match(job, candidates[0])
+        best_node = candidates[0]
+        logger.info(f"[MATCH DEBUG] Selected node: {best_node.node_id[:16]}, ask={best_node.ask_price}")
+        
+        # 构建 Node 对象用于 _create_match
+        node = Node(
+            node_id=best_node.node_id,
+            user_id=best_node.raw_data.get("user_id", ""),
+            runtime={'type': 'ollama', 'loaded_models': best_node.model_support},
+            hardware={'gpu_type': 'unknown', 'gpu_count': best_node.gpu_count},
+            reliability={'avg_latency_ms': best_node.avg_latency, 'success_rate': 0.95, 'quality_score': 0.9},
+            pricing={'ask_price_usdc_per_mtoken': best_node.ask_price},
+            location={'region': best_node.cluster_id.split('_')[1] if best_node.cluster_id else 'unknown'},
+        )
+        node.state.available_concurrency = best_node.available_concurrency
+        node.state.available_queue_tokens = best_node.available_queue_tokens
+        
+        return self._create_match(job, node)
     
     def _can_match(self, job: Job, node: Node, node_status: dict = None) -> bool:
         """检查是否可以撮合 (从 NodeStatusStore 获取容量)

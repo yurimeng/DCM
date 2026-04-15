@@ -140,6 +140,11 @@ class NodeStatusInfo:
     vram_used_gb: float = 0.0
     vram_total_gb: float = 0.0
     cluster_id: Optional[str] = None
+    # 匹配相关字段
+    model_support: List[str] = field(default_factory=list)
+    ask_price: float = 0.001  # USDC per 1M tokens
+    avg_latency: int = 100  # ms
+    gpu_count: int = 1
     # 原始数据
     raw_data: Dict = field(default_factory=dict)
     
@@ -164,6 +169,10 @@ class NodeStatusInfo:
             "vram_used_gb": self.vram_used_gb,
             "vram_total_gb": self.vram_total_gb,
             "cluster_id": self.cluster_id,
+            "model_support": self.model_support,
+            "ask_price": self.ask_price,
+            "avg_latency": self.avg_latency,
+            "gpu_count": self.gpu_count,
         }
 
 
@@ -333,6 +342,14 @@ class NodeStatusStore:
         load = raw_status.get("load", {})
         st = raw_status.get("status", {})
         
+        # 解析静态配置字段
+        # model_support: 从 model_support 或 status.model_support 获取
+        model_support = raw_status.get("model_support", [])
+        if not model_support and st.get("model_support"):
+            model_support = st.get("model_support")
+        if not model_support and st.get("loaded_models"):
+            model_support = st.get("loaded_models")
+        
         return NodeStatusInfo(
             node_id=node_id,
             is_online=age_seconds <= 10,  # 10秒内更新视为在线
@@ -344,6 +361,10 @@ class NodeStatusStore:
             vram_used_gb=st.get("vram_used_gb", 0.0),
             vram_total_gb=st.get("vram_total_gb", 0.0),
             cluster_id=raw_status.get("cluster_id"),
+            model_support=model_support if isinstance(model_support, list) else [],
+            ask_price=st.get("ask_price", 0.001),
+            avg_latency=st.get("avg_latency", 100),
+            gpu_count=st.get("gpu_count", 1),
             raw_data=raw_status,
         )
     

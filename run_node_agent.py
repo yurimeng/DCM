@@ -154,8 +154,28 @@ class NodeAgent:
         """发送心跳并处理 re_register"""
         try:
             resp = requests.post(
-                f"{self.dcm_url}/api/v1/nodes/{self.node_id}/heartbeat",
-                json={"status": "online", "current_jobs": 0},
+                f"{self.dcm_url}/api/v1/nodes/{self.node_id}/live_status",
+                json={
+                    "timestamp": int(time.time() * 1000),
+                    "status": {
+                        "status": "online",
+                        "model_support": [self.model],
+                        "ask_price": self.capability.get("ask_price", 0.001),
+                        "avg_latency": self.capability.get("avg_latency", 100),
+                        "gpu_count": self.capability.get("gpu_count", 1),
+                        "gpu_type": self.capability.get("gpu_type", "RTX"),
+                        "vram_used_gb": 8.0,
+                        "vram_total_gb": self.capability.get("vram_gb", 24),
+                    },
+                    "capacity": {
+                        "max_concurrency_total": 2,
+                        "max_concurrency_available": 2,
+                    },
+                    "load": {
+                        "active_jobs": 0,
+                        "available_token_capacity": 100000,
+                    }
+                },
                 timeout=5
             )
             
