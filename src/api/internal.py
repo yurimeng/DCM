@@ -1069,3 +1069,42 @@ async def debug_node_login(
         result["node_trace"] = traceback.format_exc()
     
     return result
+
+@router.post("/debug/test-status-store")
+async def debug_test_status_store(
+    node_id: str,
+    db: Session = Depends(get_db)
+):
+    """测试 NodeStatusStore"""
+    from ..services.node_status_store import update_node_status, get_node_info
+    import traceback
+    import time
+    
+    result = {"node_id": node_id}
+    
+    # Test update_node_status
+    try:
+        live_status = {
+            "timestamp": int(time.time() * 1000),
+            "status": {"state": "idle", "vram_used_gb": 0, "vram_total_gb": 24},
+            "capacity": {"max_concurrency_total": 2, "max_concurrency_available": 2},
+            "load": {"active_jobs": 0, "available_token_capacity": 100000},
+        }
+        update_node_status(node_id, live_status)
+        result["update_status"] = "ok"
+    except Exception as e:
+        result["update_status"] = "error"
+        result["update_error"] = str(e)
+        result["update_trace"] = traceback.format_exc()
+    
+    # Test get_node_info
+    try:
+        info = get_node_info(node_id)
+        result["get_info"] = "ok"
+        result["node_info"] = info
+    except Exception as e:
+        result["get_info"] = "error"
+        result["get_error"] = str(e)
+        result["get_trace"] = traceback.format_exc()
+    
+    return result
