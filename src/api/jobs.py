@@ -133,6 +133,63 @@ async def debug_db_status(db: Session = Depends(get_db)):
         "nodes": db.query(NodeDB).count(),
     }
 
+
+@router.get("/debug/matching-status")
+async def debug_matching_status(db: Session = Depends(get_db)):
+    """
+    调试端点：检查匹配系统状态
+    """
+    from ..services.node_status_store import (
+        list_online_nodes, list_nodes, node_status_store
+    )
+    from ..repositories import NodeRepository, JobRepository
+    from ..models.db_models import JobDB
+    
+    # DB nodes
+    node_repo = NodeRepository(db)
+    all_db_nodes = node_repo.list_all()
+    
+    # NodeStatusStore nodes
+    all_store_nodes = list_nodes()
+    online_store_nodes = list_online_nodes()
+    
+    # Pending jobs
+    pending_jobs = db.query(JobDB).filter(JobDB.status == "pending").all()
+    
+    return {
+        "db_nodes": {
+            "total": len(all_db_nodes),
+            "nodes": [
+                {
+                    "node_id": n.node_id[:20],
+                    "status": n.status.value,
+                    "ask_price": n.ask_price,
+                    "model_support": n.model_support,
+                }
+                for n in all_db_nodes
+            ]
+        },
+        "node_status_store": {
+            "total_nodes": len(all_store_nodes),
+            "online_nodes": len(online_store_nodes),
+            "online_node_ids": [n.node_id[:20] for n in online_store_nodes],
+            "all_node_ids": [n.node_id[:20] for n in all_store_nodes],
+        },
+        "pending_jobs": {
+            "total": len(pending_jobs),
+            "jobs": [
+                {
+                    "job_id": j.job_id[:20],
+                    "model": j.model,
+                    "bid_price": float(j.bid_price),
+                }
+                for j in pending_jobs
+            ]
+        },
+        "backend_type": type(node_status_store._backend).__name__,
+    }
+
+
 @router.get("/{job_id}")
 async def get_job(
     job_id: str,
