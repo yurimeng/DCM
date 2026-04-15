@@ -12,62 +12,6 @@ from .api import jobs_router, nodes_router, users_router, internal_router, dispu
 from .database import init_db, SessionLocal
 
 
-def _create_test_users():
-    """
-    Create test users for development
-    创建测试用户
-    
-    Test accounts:
-    - user1 / 123456
-    - user2 / 123456
-    - user3 / 123456
-    """
-    from .models.user import User, AuthProvider, UserRole
-    from .repositories import UserRepository
-    import uuid
-    
-    db = SessionLocal()
-    try:
-        user_repo = UserRepository(db)
-        
-        test_users = [
-            {"email": "user1@example.com", "username": "user1"},
-            {"email": "user2@example.com", "username": "user2"},
-            {"email": "user3@example.com", "username": "user3"},
-        ]
-        
-        created_count = 0
-        for test_user in test_users:
-            # Check if user exists
-            existing = user_repo.get_by_email(test_user["email"])
-            if existing:
-                print(f"  Test user {test_user['username']} already exists")
-                continue
-            
-            # Create user
-            user = User(
-                user_id=str(uuid.uuid4()),
-                auth_provider=AuthProvider.EMAIL,
-                email=test_user["email"],
-                username=test_user["username"],
-                password_hash=User.hash_password("123456"),
-                role=UserRole.USER,
-                reputation_score=0.5,
-            )
-            
-            user_repo.create(user)
-            created_count += 1
-            print(f"  Created test user: {test_user['username']} (password: 123456)")
-        
-        if created_count > 0:
-            print(f"  Created {created_count} test users")
-        
-    except Exception as e:
-        print(f"  Warning: Failed to create test users: {e}")
-    finally:
-        db.close()
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -83,9 +27,6 @@ async def lifespan(app: FastAPI):
     # 从数据库加载状态到内存
     _load_matching_state()
     
-    # 创建测试用户
-    print("Creating test users...")
-    _create_test_users()
     
     yield
     
