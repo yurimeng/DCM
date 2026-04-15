@@ -39,85 +39,79 @@ def _safe_status(status) -> str:
     return str(status)
 
 
-@router.post("", response_model=NodeResponse)
+@router.post("")
 async def register_node(
-    node_create: NodeCreate,
+    body: dict = Body(...),
     db: Session = Depends(get_db)
 ):
     """
-    Register new node (First time)
-    Node 注册（第一次）
+    Register new node
     
-    Flow:
-    1. 验证用户
-    2. 创建 Node 记录
-    3. 返回 node_id 给 Node
-    4. Node 上报 live_status 后，NodeStatusStore 生成 cluster_id
+    Input: {
+        user_id: str,
+        runtime: {type, loaded_models},
+        hardware: {gpu_type, gpu_count},
+        location: {region},
+        pricing: {ask_price}
+    }
+    
+    Output: {status: "OK", node_id: "xxx"} or {status: "Failed", error: "..."}
+    
+    Note: cluster_id will be assigned after capacity_update
     """
-    import time
+    import uuid
+    import json
     
-    # 1. Validate user_id / 验证用户 ID
-    user_id = node_create.user_id
+    # 1. Get user_id
+    user_id = body.get("user_id")
     if not user_id:
-        raise HTTPException(status_code=400, detail="user_id is required")
+        return {"status": "Failed", "error": "user_id required"}
     
+    # 2. Validate user
     from ..repositories import UserRepository
     user_repo = UserRepository(db)
-    is_valid, user_db, error_msg = user_repo.validate_user_id(user_id)
-    
+    is_valid, _, error_msg = user_repo.validate_user_id(user_id)
     if not is_valid:
-        logger.warning(f"User validation failed: {error_msg}")
-        raise HTTPException(status_code=403, detail=error_msg)
+        return {"status": "Failed", "error": error_msg or "Invalid user"}
     
-    # 2. Create Node Pydantic model
+    # 3. Create Node
     from ..models import Node
     from ..models.node import Pricing
     
-    avg_latency_ms = 100
-    if node_create.pricing and hasattr(node_create.pricing, 'avg_latency_ms'):
-        avg_latency_ms = node_create.pricing.avg_latency_ms or 100
-    
-    pricing_obj = node_create.pricing if node_create.pricing else Pricing()
+    runtime = body.get("runtime", {"type": "ollama", "loaded_models": []})
+    hardware = body.get("hardware", {"gpu_type": "unknown", "gpu_count": 1})
+    location = body.get("location", {"region": "unknown"})
+    pricing_data = body.get("pricing", {})
     
     node = Node(
         node_id=str(uuid.uuid4()),
         user_id=user_id,
-        runtime=node_create.runtime or {'type': 'ollama', 'loaded_models': []},
-        hardware=node_create.hardware or {'gpu_type': 'unknown', 'gpu_count': 1},
-        reliability={'avg_latency_ms': avg_latency_ms},
-        pricing=pricing_obj,
-        location=node_create.location or {'region': 'unknown'},
+        runtime=runtime,
+        hardware=hardware,
+        pricing=Pricing(),
+        location=location,
     )
     node.economy.stake_tier = 'personal'
     node.state.status = 'online'
     
-    # 3. Save to DB
+    # 4. Save to DB
+    from ..repositories import NodeRepository
     node_repo = NodeRepository(db)
-    db_node = node_repo.create(node)
+    try:
+        db_node = node_repo.create(node)
+    except Exception as e:
+        return {"status": "Failed", "error": str(e)}
     
-    # 4. Update user's node_ids
+    # 5. Update user's node_ids
     user_repo.add_node_to_user(user_id, node.node_id)
     
-    # 5. Update runtime info in NodeDB
+    # 6. Update runtime info
     node_repo.update(node.node_id, 
-        runtime=json.dumps(node.runtime.model_dump()) if hasattr(node.runtime, 'model_dump') else '{}',
-        model=node.runtime.loaded_models[0] if node.runtime.loaded_models else 'unknown'
+        runtime=json.dumps(runtime),
+        model=runtime.get("loaded_models", [None])[0] if runtime.get("loaded_models") else "unknown"
     )
     
-    # 6. Return response - cluster_id will be assigned when Node sends live_status
-    return NodeResponse(
-        node_id=node.node_id,
-        user_id=user_id,
-        status=NodeStatus(_safe_status(db_node.status)),
-        stake_required=db_node.stake_required,
-        gpu_type=node.hardware.gpu_type,
-        gpu_count=node.hardware.gpu_count,
-        stake_amount=db_node.stake_amount,
-        slot_count=0,
-        worker_count=0,
-        next_step=f"Deposit {db_node.stake_required} USDC to activate",
-        cluster_id=None,  # Will be assigned when Node sends live_status
-    )
+    return {"status": "OK", "node_id": node.node_id}
     return NodeResponse(
         node_id=node.node_id,
         user_id=user_id,
@@ -136,18 +130,9 @@ async def register_node(
 @router.post("/{node_id}/login")
 async def node_login(
     node_id: str,
-    login_data: dict = Body(..., description="{user_id: xxx}")
     db: Session = Depends(get_db)
 ):
-    """
-    Node Login (后续登录)
-    
-    Flow:
-    1. 验证用户 + Node
-    2. 返回当前 cluster_id
-    
-    注意: Node 必须先调用 POST /api/v1/nodes 注册获取 node_id
-    """
+    """Node Login"""
     import time
     import logging
     import json
