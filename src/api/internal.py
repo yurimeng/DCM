@@ -998,6 +998,11 @@ async def db_migrate(db: Session = Depends(get_db)):
     
     migrations = [
         ("nodes", "cluster_id", "VARCHAR(50)"),
+        ("jobs", "max_latency", "INTEGER NOT NULL DEFAULT 30000"),
+        ("jobs", "user_id", "VARCHAR(36)"),
+        ("jobs", "input_tokens", "INTEGER NOT NULL DEFAULT 10"),
+        ("jobs", "output_tokens_limit", "INTEGER NOT NULL DEFAULT 100"),
+        ("jobs", "bid_price", "FLOAT NOT NULL DEFAULT 0.001"),
     ]
     
     results = []

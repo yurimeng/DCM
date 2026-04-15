@@ -29,6 +29,7 @@ NODE_INFO_FILE = ".node_info"
 
 # 节点能力配置
 NODE_CAPABILITY = {
+    "user_id": "55de1671-1c55-4410-a078-a63922db9e8e",  # TODO: Replace with your user_id
     "address": "localhost",
     "port": 11434,
     "models": [MODEL],

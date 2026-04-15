@@ -262,92 +262,129 @@ class MatchingService:
         return model_name.split(":")[0] if ":" in model_name else model_name
     
     def _match(self, job: Job) -> Optional[Match]:
-        """执行撮合逻辑（两阶段分层匹配）
+        """执行撮合逻辑 - 两阶段分层匹配
         
-        第一阶段: Cluster 分配
-        - 从 NodeStatusStore 获取在线节点
-        - 按 model_family 过滤
-        
-        第二阶段: Node 选择
-        - 按价格排序
-        - 选择最优节点
+        第一阶段: 获取所有在线节点
+        第二阶段: 过滤与排序（模型、容量、价格、延迟）
+        第三阶段: 构建 Node 对象并创建 Match
         """
         import logging
         logger = logging.getLogger(__name__)
-        logger.info(f"[MATCH DEBUG] _match() called for job {job.job_id}, model={job.model}")
         
-        from .node_status_store import list_online_nodes, node_status_store
+        logger.info(f"[MATCH] _match() called for job {job.job_id}, model={job.model}")
         
+        from .node_status_store import list_online_nodes
+        
+        # ═══════════════════════════════════════════════════════════════
         # 第一阶段: 获取在线节点
+        # ═══════════════════════════════════════════════════════════════
+        
         online_nodes = list_online_nodes(max_age_seconds=10)
-        logger.info(f"[MATCH DEBUG] Online nodes: {len(online_nodes)}")
+        logger.info(f"[MATCH] Online nodes count: {len(online_nodes)}")
         
         if not online_nodes:
-            logger.info(f"[MATCH DEBUG] No online nodes")
+            logger.info(f"[MATCH] No online nodes available")
             return None
         
-        # 解析 job 需要的 tokens
-        job_tokens = job.input_tokens + job.output_tokens_limit
-        logger.info(f"[MATCH DEBUG] job_tokens={job_tokens}")
+        # ═══════════════════════════════════════════════════════════════
+        # 第二阶段: 过滤与排序
+        # ═══════════════════════════════════════════════════════════════
         
-        # 价格统一到 per-1M-tokens
+        # 计算 Job 需要的 tokens
+        job_tokens = job.input_tokens + job.output_tokens_limit
+        
+        # 统一价格单位: job.bid_price 是 per-token，node.ask_price 是 per-1M-tokens
         job_price_per_m = job.bid_price * 1_000_000
         
         candidates = []
+        
         for node_info in online_nodes:
-            # 容量检查
+            # 1. 容量检查
             if node_info.available_queue_tokens < job_tokens:
-                logger.info(f"[MATCH DEBUG] Node {node_info.node_id[:16]} capacity fail: {node_info.available_queue_tokens} < {job_tokens}")
+                logger.info(f"[MATCH] Node {node_info.node_id[:16]} capacity fail: {node_info.available_queue_tokens} < {job_tokens}")
                 continue
             
-            # 模型匹配
+            # 2. 模型匹配
             if job.model:
-                # 精确匹配或前缀匹配
                 model_match = False
                 for supported in node_info.model_support:
-                    if supported == job.model or job.model.startswith(supported) or supported.startswith(job.model):
+                    # 支持精确匹配、前缀匹配
+                    if (supported == job.model or
+                        job.model.startswith(supported) or
+                        supported.startswith(job.model)):
                         model_match = True
                         break
+                
                 if not model_match:
-                    logger.info(f"[MATCH DEBUG] Node {node_info.node_id[:16]} model mismatch: {node_info.model_support}")
+                    logger.info(f"[MATCH] Node {node_info.node_id[:16]} model mismatch")
                     continue
             
-            # 价格检查 (job per-token * 1M >= node per-1M-tokens)
+            # 3. 价格检查 (job_per_token * 1M >= node_per_1m_tokens)
             if job_price_per_m < node_info.ask_price:
-                logger.info(f"[MATCH DEBUG] Node {node_info.node_id[:16]} price fail: {job_price_per_m} < {node_info.ask_price}")
+                logger.info(f"[MATCH] Node {node_info.node_id[:16]} price fail: {job_price_per_m} < {node_info.ask_price}")
                 continue
             
-            # 延迟检查
+            # 4. 延迟检查
             if node_info.avg_latency > job.max_latency:
-                logger.info(f"[MATCH DEBUG] Node {node_info.node_id[:16]} latency fail: {node_info.avg_latency} > {job.max_latency}")
+                logger.info(f"[MATCH] Node {node_info.node_id[:16]} latency fail: {node_info.avg_latency} > {job.max_latency}")
                 continue
             
-            logger.info(f"[MATCH DEBUG] Node {node_info.node_id[:16]} is candidate: ask={node_info.ask_price}, lat={node_info.avg_latency}")
+            # 通过所有检查，加入候选
             candidates.append(node_info)
         
-        logger.info(f"[MATCH DEBUG] Candidates: {len(candidates)}")
+        logger.info(f"[MATCH] Candidates count: {len(candidates)}")
         
         if not candidates:
             return None
         
-        # 第二阶段: 按价格排序，选择最优节点
-        candidates.sort(key=lambda n: (n.ask_price, n.avg_latency))
-        best_node = candidates[0]
-        logger.info(f"[MATCH DEBUG] Selected node: {best_node.node_id[:16]}, ask={best_node.ask_price}")
+        # ═══════════════════════════════════════════════════════════════
+        # 第三阶段: 选择最优并创建 Match
+        # ═══════════════════════════════════════════════════════════════
         
-        # 构建 Node 对象用于 _create_match
+        # 按价格排序 (最低价优先，相同时按延迟)
+        candidates.sort(key=lambda n: (n.ask_price, n.avg_latency))
+        
+        best_node = candidates[0]
+        logger.info(f"[MATCH] Selected node: {best_node.node_id[:16]}, ask={best_node.ask_price}")
+        
+        # 从 raw_data 获取 user_id（如果有）
+        user_id = best_node.raw_data.get("user_id", "") if best_node.raw_data else ""
+        
+        # 提取 region from cluster_id (格式: C_usw_P_Q_A_3f2e)
+        region = "unknown"
+        if best_node.cluster_id:
+            parts = best_node.cluster_id.split("_")
+            if len(parts) >= 2:
+                region = parts[1][:3] if len(parts[1]) >= 3 else parts[1]
+        
+        # 构建 Node 对象
         node = Node(
             node_id=best_node.node_id,
-            user_id=best_node.raw_data.get("user_id", ""),
-            runtime={'type': 'ollama', 'loaded_models': best_node.model_support},
-            hardware={'gpu_type': 'unknown', 'gpu_count': best_node.gpu_count},
-            reliability={'avg_latency_ms': best_node.avg_latency, 'success_rate': 0.95, 'quality_score': 0.9},
-            pricing={'ask_price_usdc_per_mtoken': best_node.ask_price},
-            location={'region': best_node.cluster_id.split('_')[1] if best_node.cluster_id else 'unknown'},
+            user_id=user_id,
+            runtime={
+                'type': 'ollama',
+                'loaded_models': best_node.model_support or []
+            },
+            hardware={
+                'gpu_type': 'unknown',
+                'gpu_count': best_node.gpu_count or 1
+            },
+            reliability={
+                'avg_latency_ms': best_node.avg_latency,
+                'success_rate': 0.95,
+                'quality_score': 0.9
+            },
+            pricing={
+                'ask_price_usdc_per_mtoken': best_node.ask_price
+            },
+            location={'region': region},
         )
+        
+        # 设置实时容量
         node.state.available_concurrency = best_node.available_concurrency
         node.state.available_queue_tokens = best_node.available_queue_tokens
         
+        # 创建 Match
         return self._create_match(job, node)
     
     def _can_match(self, job: Job, node: Node, node_status: dict = None) -> bool:
