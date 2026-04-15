@@ -984,3 +984,38 @@ async def verify_settlement(
         "reason": reason,
         "verified_at": datetime.utcnow().isoformat()
     }
+
+# ===== 数据库迁移接口 =====
+
+@router.post("/db/migrate")
+async def db_migrate(db: Session = Depends(get_db)):
+    """
+    数据库迁移：添加新列到现有表
+    """
+    from sqlalchemy import text
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    migrations = [
+        ("nodes", "cluster_id", "VARCHAR(50)"),
+    ]
+    
+    results = []
+    for table, column, col_type in migrations:
+        try:
+            # 检查列是否存在
+            result = db.execute(text(f"PRAGMA table_info({table})"))
+            columns = [row[1] for row in result]
+            
+            if column not in columns:
+                db.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
+                db.commit()
+                results.append({"table": table, "column": column, "status": "added"})
+                logger.info(f"Migration: Added {column} to {table}")
+            else:
+                results.append({"table": table, "column": column, "status": "exists"})
+        except Exception as e:
+            results.append({"table": table, "column": column, "status": "error", "error": str(e)})
+            logger.error(f"Migration failed: {e}")
+    
+    return {"migrations": results}
