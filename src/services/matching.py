@@ -365,8 +365,12 @@ class MatchingService:
         # job.model 为空: 不检查模型（匹配任何可用节点）
         
         # 价格匹配
-        if job.bid_price < node.ask_price:
-            logger.info(f"[_can_match DEBUG] Price fail: {job.bid_price} < {node.ask_price}")
+        # job.bid_price: USDC per token
+        # node.ask_price: USDC per 1M tokens
+        # 统一单位: job.bid_price * 1M >= node.ask_price
+        job_price_per_m = job.bid_price * 1_000_000
+        if job_price_per_m < node.ask_price:
+            logger.info(f"[_can_match DEBUG] Price fail: {job_price_per_m} < {node.ask_price} (job*1M < node)")
             return False
         
         # 3. 延迟匹配
@@ -398,7 +402,9 @@ class MatchingService:
         - 成功率权重 20%
         """
         # 归一化价格 (0-1)
-        price_score = node.ask_price / max(job.bid_price, 0.001)
+        # 价格分数 = job出价 / node要价 (统一到 per-1M-tokens)
+        job_price_per_m = job.bid_price * 1_000_000
+        price_score = job_price_per_m / max(node.ask_price, 0.001)
         
         # 归一化延迟 (0-1)
         latency_score = job.max_latency / max(node.avg_latency, 1)
