@@ -854,7 +854,7 @@ async def node_capacity_report(
     - 可能触发 Cluster ID 重新计算
     - 返回新的 cluster_id（如果有变化）
     """
-    from ..services.node_status_store import update_node_status
+    from ..services.node_status_store import update_node_status, node_status_store
     
     # 验证 Node 存在
     node_repo = NodeRepository(db)
@@ -863,14 +863,30 @@ async def node_capacity_report(
     if not db_node:
         raise HTTPException(status_code=404, detail="Node not found")
     
-    # 更新 runtime 和 model（如果提供）
+    # ===== 提取静态配置并更新 DB =====
     update_fields = {}
     
+    # 1. runtime 和 models
     if report_data.get("runtime"):
         runtime = report_data["runtime"]
-        update_fields["runtime"] = runtime.get("type", "ollama")
-        update_fields["model"] = ",".join(runtime.get("loaded_models", []))
+        update_fields["runtime"] = json.dumps(runtime)
+        if runtime.get("loaded_models"):
+            update_fields["model"] = runtime["loaded_models"][0]
+            update_fields["model_support"] = json.dumps(runtime["loaded_models"])
     
+    # 2. ask_price
+    if report_data.get("ask_price"):
+        update_fields["ask_price"] = float(report_data["ask_price"])
+    
+    # 3. avg_latency
+    if report_data.get("avg_latency"):
+        update_fields["avg_latency"] = int(report_data["avg_latency"])
+    
+    # 4. gpu_count
+    if report_data.get("gpu_count"):
+        update_fields["gpu_count"] = int(report_data["gpu_count"])
+    
+    # 5. capacity
     if report_data.get("capacity"):
         cap = report_data["capacity"]
         if cap.get("max_concurrency_total"):
@@ -878,45 +894,61 @@ async def node_capacity_report(
     
     if update_fields:
         node_repo.update(node_id, **update_fields)
+        logger.info(f"Node {node_id} static config updated: {update_fields}")
     
-    # 获取之前的状态，合并到 report_data 中
-    # 这样 capacity_report 不会覆盖 live_status 设置的字段
-    from ..services.node_status_store import node_status_store
+    # ===== 合并状态到 NodeStatusStore =====
+    # 获取之前的状态
     prev_status = node_status_store.get(node_id)
     
-    # 合并状态
-    # capacity_report 优先使用自己的 runtime.loaded_models 作为 model_support
+    # 合并状态：capacity_report 优先使用自己的数据
     merged_status = {
         "timestamp": report_data.get("timestamp"),
-        "status": {},
+        "status": {
+            "status": "online",
+        },
         "capacity": report_data.get("capacity", {}),
         "load": report_data.get("load", {}),
     }
     
-    # 从 capacity_report 提取 runtime 信息
+    # 从 report_data 提取静态配置
     runtime_data = report_data.get("runtime", {})
     report_models = runtime_data.get("loaded_models", [])
     
-    # 从 prev_status 提取备用字段
+    # model_support: 优先使用 runtime.loaded_models
+    if report_models:
+        merged_status["status"]["model_support"] = report_models
+    elif prev_status:
+        merged_status["status"]["model_support"] = prev_status.get("status", {}).get("model_support", [])
+    
+    # ask_price
+    if report_data.get("ask_price"):
+        merged_status["status"]["ask_price"] = float(report_data["ask_price"])
+    elif prev_status:
+        merged_status["status"]["ask_price"] = prev_status.get("status", {}).get("ask_price", 0.001)
+    
+    # avg_latency
+    if report_data.get("avg_latency"):
+        merged_status["status"]["avg_latency"] = int(report_data["avg_latency"])
+    elif prev_status:
+        merged_status["status"]["avg_latency"] = prev_status.get("status", {}).get("avg_latency", 100)
+    
+    # gpu_count
+    if report_data.get("gpu_count"):
+        merged_status["status"]["gpu_count"] = int(report_data["gpu_count"])
+    elif prev_status:
+        merged_status["status"]["gpu_count"] = prev_status.get("status", {}).get("gpu_count", 1)
+    
+    # 从 prev_status 保留其他字段
     if prev_status:
         prev_st = prev_status.get("status", {})
-        merged_status["status"]["status"] = "online"
-        # 优先使用 capacity_report 的 models
-        merged_status["status"]["model_support"] = report_models if report_models else prev_st.get("model_support", [])
-        merged_status["status"]["ask_price"] = prev_st.get("ask_price", 0.001)
-        merged_status["status"]["avg_latency"] = prev_st.get("avg_latency", 100)
-        merged_status["status"]["gpu_count"] = prev_st.get("gpu_count", 1)
-        merged_status["status"]["gpu_type"] = prev_st.get("gpu_type", "")
-        merged_status["status"]["vram_used_gb"] = prev_st.get("vram_used_gb", 0)
-        merged_status["status"]["vram_total_gb"] = prev_st.get("vram_total_gb", 0)
-        merged_status["load"] = prev_status.get("load", {})
-    else:
-        # 没有 prev_status，使用 capacity_report 的数据
-        merged_status["status"]["status"] = "online"
-        merged_status["status"]["model_support"] = report_models
+        merged_status["status"].setdefault("gpu_type", prev_st.get("gpu_type", ""))
+        merged_status["status"].setdefault("vram_used_gb", prev_st.get("vram_used_gb", 0))
+        merged_status["status"].setdefault("vram_total_gb", prev_st.get("vram_total_gb", 0))
+        if not report_data.get("load"):
+            merged_status["load"] = prev_status.get("load", {})
     
-    # 准备 capacity_info 用于 NodeStatusStore 生成 cluster_id
-    models = []
+    # ===== 准备 capacity_info 用于生成 cluster_id =====
+    models = merged_status["status"].get("model_support", [])
     if report_data.get("runtime"):
         models = report_data["runtime"].get("loaded_models", [])
     if not models and prev_status:
