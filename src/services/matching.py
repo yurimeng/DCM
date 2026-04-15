@@ -372,7 +372,7 @@ class MatchingService:
             
             # 3. 价格检查 (per-token 直接比较)
             if job.bid_price < node_info.ask_price:
-                logger.info(f"[MATCH] Node {node_info.node_id[:16]} price fail: {job.bid_price} < {node_info.ask_price}")
+                logger.info(f"[MATCH] Node {node_info.node_id[:16]} price fail: bid={job.bid_price} < ask={node_info.ask_price}")
                 continue
             
             # 4. 延迟检查
@@ -472,7 +472,7 @@ class MatchingService:
         # 价格匹配 (per-token 直接比较)
         # job 出价 >= node 要价
         if job.bid_price < node.ask_price:
-            logger.info(f"[_can_match DEBUG] Price fail: {job.bid_price} < {node.ask_price}")
+            logger.info(f"[_can_match DEBUG] Price fail: bid={job.bid_price} < ask={node.ask_price}")
             return False
         
         # 3. 延迟匹配

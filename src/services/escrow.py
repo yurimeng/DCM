@@ -41,7 +41,7 @@ class EscrowService:
         """
         创建 Escrow 并锁定资金
         
-        公式: escrow_amount = bid_price × (input_tokens + output_tokens_limit) / 1M × 1.1
+        公式: escrow_amount = bid_price × (input_tokens + output_tokens_limit) × 1.1 (bid_price: USDC/token)
         """
         locked_amount = self._calculate_escrow(
             bid_price, input_tokens, output_tokens_limit
@@ -291,15 +291,15 @@ class EscrowService:
     @staticmethod
     def _calculate_escrow(bid_price: float, input_tokens: int, 
                           output_tokens_limit: int) -> float:
-        """计算 Escrow 锁定金额"""
+        """计算 Escrow 锁定金额 (bid_price: USDC per token)"""
         total_tokens = input_tokens + output_tokens_limit
-        base_cost = bid_price * total_tokens / 1_000_000
+        base_cost = bid_price * total_tokens  # per-token 直接计算
         return round(base_cost * settings.escrow_buffer, 8)
     
     @staticmethod
     def _calculate_cost(locked_price: float, actual_tokens: int) -> float:
-        """计算实际费用"""
-        return round(locked_price * actual_tokens / 1_000_000, 8)
+        """计算实际费用 (locked_price: USDC per token)"""
+        return round(locked_price * actual_tokens, 8)
 
 
 # 单例

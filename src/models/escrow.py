@@ -27,7 +27,7 @@ class Escrow(BaseModel):
     match_id: Optional[str] = None
     
     # 金额（USDC）
-    locked_amount: float  # 锁定金额 = bid_price × (input + output_limit) / 1M × 1.1
+    locked_amount: float  # 锁定金额 = bid_price × (input + output_limit) × 1.1 (bid_price: USDC/token)
     spent_amount: float = 0.0  # 已花费（实际结算）
     refund_amount: float = 0.0  # 退还金额
     

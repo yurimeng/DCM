@@ -235,12 +235,12 @@ class SettlementConfig:
     ) -> float:
         """
         Calculate escrow locked amount
-        计算 Escrow 锁定金额
+        计算 Escrow 锁定金额 (bid_price: USDC per token)
         
-        Formula: locked = bid_price * (input + output) / 1M * buffer_multiplier
+        Formula: locked = bid_price * (input + output) * buffer_multiplier
         """
         total_tokens = input_tokens + output_tokens
-        base_cost = bid_price * total_tokens / 1_000_000
+        base_cost = bid_price * total_tokens  # per-token 直接计算
         return base_cost * self.escrow_buffer_multiplier
     
     def calculate_settlement(

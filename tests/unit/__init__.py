@@ -86,20 +86,20 @@ class TestEscrowService:
     """测试 Escrow 服务"""
     
     def test_calculate_escrow(self):
-        """测试 Escrow 计算公式"""
-        # escrow = bid_price × (input + output) / 1M × 1.1
-        # = 0.35 × (2048 + 1024) / 1M × 1.1
-        # = 0.35 × 3072 / 1M × 1.1
-        # = 0.001183 USDC
+        """测试 Escrow 计算公式 (bid_price: USDC per token)"""
+        # escrow = bid_price × (input + output) × 1.1
+        # = 0.000001 × (2048 + 1024) × 1.1 (1 USDC/1M tokens)
+        # = 0.0033792 USDC
         
         escrow = escrow_service.create_escrow(
             job_id="test-job-1",
-            bid_price=0.35,
+            bid_price=0.000001,  # 1 USDC/1M tokens
             input_tokens=2048,
             output_tokens_limit=1024,
         )
         
-        assert escrow.locked_amount == pytest.approx(0.0011832, rel=0.0001)
+        expected = 0.000001 * 3072 * 1.1  # = 0.0033792
+        assert escrow.locked_amount == pytest.approx(expected, rel=0.0001)
         assert escrow.status.value == "locked"
     
     def test_escrow_settlement(self):
@@ -109,7 +109,7 @@ class TestEscrowService:
         # 创建 Escrow
         escrow = escrow_service.create_escrow(
             job_id="test-job-2",
-            bid_price=0.30,
+            bid_price=0.000001,  # 1 USDC/1M tokens
             input_tokens=2048,
             output_tokens_limit=1024,
         )
@@ -119,19 +119,19 @@ class TestEscrowService:
         request = SettlementRequest(
             match_id="test-match-1",
             actual_tokens=2900,
-            locked_price=0.30,
+            locked_price=0.000001,  # 1 USDC/1M tokens
             verification_passed=True,
         )
         
         settled = escrow_service.execute_settlement(request)
         
         # 验证结算金额
-        # actual_cost = 0.30 × 2900 / 1M = 0.00087
-        # node_earn = 0.00087 × 0.95 = 0.0008265
-        # platform_fee = 0.00087 × 0.05 = 0.0000435
+        # actual_cost = 0.000001 × 2900 = 0.0029
+        # node_earn = 0.0029 × 0.95 = 0.002755
+        # platform_fee = 0.0029 × 0.05 = 0.000145
         
-        assert settled.actual_cost == pytest.approx(0.00087, rel=0.001)
-        assert settled.node_earn == pytest.approx(0.0008265, rel=0.001)
+        assert settled.actual_cost == pytest.approx(0.0029, rel=0.001)
+        assert settled.node_earn == pytest.approx(0.002755, rel=0.001)
         assert settled.platform_fee == pytest.approx(0.0000435, rel=0.001)
         assert settled.status.value == "settled"
 

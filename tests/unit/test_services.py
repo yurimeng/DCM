@@ -83,27 +83,27 @@ class TestEscrowService:
     """测试 Escrow 服务"""
     
     def test_calculate_escrow(self):
-        """测试 Escrow 计算公式"""
-        # escrow_amount = bid_price × (input + output) / 1M × 1.1
+        """测试 Escrow 计算公式 (bid_price: USDC per token)"""
+        # escrow_amount = bid_price × (input + output) × 1.1
         escrow = EscrowService._calculate_escrow(
-            bid_price=0.35,
+            bid_price=0.000001,  # 1 USDC/1M tokens
             input_tokens=2048,
             output_tokens_limit=100
         )
         
-        # 0.35 × (2048 + 100) / 1_000_000 × 1.1
-        expected = 0.35 * 2148 / 1_000_000 * 1.1
+        # 0.000001 × (2048 + 100) × 1.1 = 0.0000023628
+        expected = 0.000001 * 2148 * 1.1
         assert abs(escrow - expected) < 0.0000001
     
     def test_calculate_cost(self):
-        """测试费用计算"""
+        """测试费用计算 (locked_price: USDC per token)"""
         cost = EscrowService._calculate_cost(
-            locked_price=0.30,
+            locked_price=0.000001,  # 1 USDC/1M tokens
             actual_tokens=2048
         )
         
-        # 0.30 × 2048 / 1_000_000
-        expected = 0.30 * 2048 / 1_000_000
+        # 0.000001 × 2048 = 0.002048
+        expected = 0.000001 * 2048
         assert abs(cost - expected) < 0.0000001
     
     def test_create_escrow(self):
@@ -111,7 +111,7 @@ class TestEscrowService:
         service = EscrowService()
         escrow = service.create_escrow(
             job_id="test-job-001",
-            bid_price=0.35,
+            bid_price=0.000001,  # 1 USDC/1M tokens
             input_tokens=2048,
             output_tokens_limit=100
         )

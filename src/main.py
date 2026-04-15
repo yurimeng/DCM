@@ -120,7 +120,7 @@ MVP（验证期）- 验证三个核心假设：
 ### 核心约束
 - MVP 仅支持 llama3-8b 模型
 - 使用 USDC 结算
-- Escrow 公式: bid × (input + output) / 1M × 1.1
+- Escrow 公式: bid × (input + output) × 1.1 (bid: USDC/token)
     """,
     lifespan=lifespan,
 )
