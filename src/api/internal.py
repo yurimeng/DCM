@@ -1222,3 +1222,37 @@ async def test_login_request(
         "body_type": str(type(body)),
         "body_keys": list(body.keys()) if isinstance(body, dict) else [],
     }
+
+@router.post("/debug/node-login-simple")
+async def debug_node_login_simple(
+    node_id: str,
+    body: dict,
+    db: Session = Depends(get_db)
+):
+    """简化版 node_login 调试"""
+    import time
+    from ..repositories import UserRepository, NodeRepository
+    
+    user_id = body.get("user_id") if body else None
+    
+    # 简化逻辑
+    if not user_id:
+        return {"error": "missing user_id"}
+    
+    user_repo = UserRepository(db)
+    is_valid, _, _ = user_repo.validate_user_id(user_id)
+    if not is_valid:
+        return {"error": "invalid user"}
+    
+    node_repo = NodeRepository(db)
+    db_node = node_repo.get(node_id)
+    
+    if not db_node:
+        return {"error": "node not found"}
+    
+    return {
+        "node_id": node_id,
+        "status": "ok",
+        "cluster_id": db_node.cluster_id,
+        "timestamp": int(time.time() * 1000),
+    }
