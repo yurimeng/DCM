@@ -221,7 +221,7 @@ async def login_user(
     if not db_user:
         return {"status": "Failed", "error": "Email not found"}
     
-    if not db_user.verify_password(password):
+    if not User.verify_password(password, db_user.password_hash):
         return {"status": "Failed", "error": "Invalid password"}
     
     return {"status": "OK", "user_id": db_user.user_id}
