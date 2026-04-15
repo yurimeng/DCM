@@ -34,7 +34,10 @@ class Settings(BaseSettings):
     
     # ===== Escrow 配置 =====
     escrow_buffer: float = 1.1  # 1.1x buffer
+    # 价格默认值 (USDC per token)
     min_bid_price: float = 0.0
+    default_bid_price: float = 0.000001  # = 1 USDC/1M tokens
+    default_ask_price: float = 0.000001  # = 1 USDC/1M tokens
     
     # ===== 结算配置 =====
     platform_fee_rate: float = 0.05  # 5%

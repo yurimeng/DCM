@@ -36,7 +36,7 @@ NODE_CAPABILITY = {
     "bid_price": 0.001,
     "gpu_type": "NVIDIA RTX (Local)",
     "vram_gb": 24,
-    "ask_price": 0.002,
+    "ask_price": 0.000001,  # USDC per token
     "avg_latency": 100,
     "avg_success_rate": 0.98,  # 98% 成功率
     "avg_quality_score": 0.95,  # 95% 质量评分

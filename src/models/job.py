@@ -86,7 +86,11 @@ class JobCreate(BaseModel):
     input_tokens: int = Field(..., gt=0, description="输入 token 数量")
     output_tokens_limit: int = Field(..., gt=0, description="输出 token 上限")
     max_latency: int = Field(..., ge=1000, le=30000, description="最大延迟（ms）")
-    bid_price: float = Field(..., gt=0, description="报价（USDC/1M tokens）")
+    bid_price: float = Field(
+        default=0.000001,  # 默认: 0.000001 USDC/token = 1 USDC/1M tokens
+        gt=0,
+        description="出价 USDC per token"
+    )
     callback_url: Optional[str] = Field(None, description="异步回调 URL（可选）")
     region: Optional[str] = Field(None, description="区域偏好")
     

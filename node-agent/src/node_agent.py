@@ -387,7 +387,7 @@ class DCMNodeAgent:
                 "runtime": self.config.runtime,
                 "model": self.config.model,
                 "model_support": [self.config.model],
-                "ask_price": 0.001,
+                "ask_price": 0.000001,  # USDC per token
                 "avg_latency": 200,
                 "region": self._detect_region(),
                 "gpu_count": system_info.gpu.qty,
@@ -541,7 +541,7 @@ class DCMNodeAgent:
                         "type": self.config.runtime,
                         "loaded_models": [self.config.model],
                     },
-                    "ask_price": 0.001,
+                    "ask_price": 0.000001,  # USDC per token
                     "avg_latency": 200,
                     "gpu_count": self.config.gpu_count,
                     "capacity": {

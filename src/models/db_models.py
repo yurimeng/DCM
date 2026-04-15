@@ -111,7 +111,7 @@ class NodeDB(Base):
     model = Column(String(50), nullable=False)  # qwen2.5:7b, llama3:8b
     
     model_support = Column(Text, nullable=False)  # JSON array
-    ask_price = Column(Float, nullable=False)
+    ask_price = Column(Float, nullable=False)  # USDC per token
     avg_latency = Column(Integer, nullable=False)
     region = Column(String(50), nullable=False)
     

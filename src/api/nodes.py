@@ -761,8 +761,9 @@ async def node_capacity_report(
             update_fields["model"] = runtime["loaded_models"][0]
             update_fields["model_support"] = json.dumps(runtime["loaded_models"])
     
-    # 2. ask_price
+    # 2. ask_price (USDC per token)
     if report_data.get("ask_price"):
+        # ask_price 单位: USDC per token (0.000001 = 1 USDC/1M tokens)
         update_fields["ask_price"] = float(report_data["ask_price"])
     
     # 3. avg_latency
@@ -810,11 +811,11 @@ async def node_capacity_report(
     elif prev_status:
         merged_status["status"]["model_support"] = prev_status.get("status", {}).get("model_support", [])
     
-    # ask_price
+    # ask_price (USDC per token)
     if report_data.get("ask_price"):
         merged_status["status"]["ask_price"] = float(report_data["ask_price"])
     elif prev_status:
-        merged_status["status"]["ask_price"] = prev_status.get("status", {}).get("ask_price", 0.001)
+        merged_status["status"]["ask_price"] = prev_status.get("status", {}).get("ask_price", 0.000001)
     
     # avg_latency
     if report_data.get("avg_latency"):

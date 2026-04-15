@@ -142,7 +142,7 @@ class NodeStatusInfo:
     cluster_id: Optional[str] = None
     # 匹配相关字段
     model_support: List[str] = field(default_factory=list)
-    ask_price: float = 0.001  # USDC per 1M tokens
+    ask_price: float = 0.000001  # USDC per token (0.000001 = 1 USDC/1M tokens)
     avg_latency: int = 100  # ms
     gpu_count: int = 1
     # 原始数据
@@ -362,7 +362,7 @@ class NodeStatusStore:
             vram_total_gb=st.get("vram_total_gb", 0.0),
             cluster_id=raw_status.get("cluster_id"),
             model_support=model_support if isinstance(model_support, list) else [],
-            ask_price=st.get("ask_price", 0.001),
+            ask_price=st.get("ask_price", 0.000001),  # 默认: 0.000001 USDC/token
             avg_latency=st.get("avg_latency", 100),
             gpu_count=st.get("gpu_count", 1),
             raw_data=raw_status,
