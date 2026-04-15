@@ -1207,3 +1207,18 @@ async def debug_test_node_login_full(
     except Exception as e:
         steps.append({"step": 4, "name": "build_return", "success": False, "error": str(e), "trace": traceback.format_exc()})
         return {"steps": steps}
+
+@router.post("/debug/test-login-request")
+async def test_login_request(
+    node_id: str,
+    body: dict,
+    db: Session = Depends(get_db)
+):
+    """测试不同格式的 login 请求"""
+    import json
+    return {
+        "received_node_id": node_id,
+        "received_body": body,
+        "body_type": str(type(body)),
+        "body_keys": list(body.keys()) if isinstance(body, dict) else [],
+    }

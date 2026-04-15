@@ -148,9 +148,11 @@ async def node_login(
     """
     import time
     import logging
+    import json
     logger = logging.getLogger(__name__)
     
-    logger.info(f"node_login: node_id={node_id}")
+    # 打印请求数据
+    logger.info(f"node_login request: node_id={node_id}, login_data={json.dumps(login_data)}")
     
     user_id = login_data.get("user_id")
     if not user_id:
