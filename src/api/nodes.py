@@ -879,9 +879,40 @@ async def node_capacity_report(
     if update_fields:
         node_repo.update(node_id, **update_fields)
     
+    # 获取之前的状态，合并到 report_data 中
+    # 这样 capacity_report 不会覆盖 live_status 设置的字段
+    from ..services.node_status_store import node_status_store
+    prev_status = node_status_store.get(node_id)
+    
+    # 合并状态
+    merged_status = {
+        "timestamp": report_data.get("timestamp"),
+        "status": {},
+        "capacity": report_data.get("capacity", {}),
+        "load": report_data.get("load", {}),
+    }
+    if prev_status:
+        # 保留之前 status 中的字段
+        prev_st = prev_status.get("status", {})
+        merged_status["status"]["status"] = "online"
+        merged_status["status"]["model_support"] = prev_st.get("model_support", [])
+        merged_status["status"]["ask_price"] = prev_st.get("ask_price", 0.001)
+        merged_status["status"]["avg_latency"] = prev_st.get("avg_latency", 100)
+        merged_status["status"]["gpu_count"] = prev_st.get("gpu_count", 1)
+        merged_status["status"]["gpu_type"] = prev_st.get("gpu_type", "")
+        merged_status["status"]["vram_used_gb"] = prev_st.get("vram_used_gb", 0)
+        merged_status["status"]["vram_total_gb"] = prev_st.get("vram_total_gb", 0)
+        merged_status["load"] = prev_status.get("load", {})
+    
     # 准备 capacity_info 用于 NodeStatusStore 生成 cluster_id
+    models = []
+    if report_data.get("runtime"):
+        models = report_data["runtime"].get("loaded_models", [])
+    if not models and prev_status:
+        models = prev_status.get("status", {}).get("model_support", [])
+    
     capacity_info = {
-        "runtime": report_data.get("runtime"),
+        "runtime": {"type": report_data.get("runtime", {}).get("type", "ollama"), "loaded_models": models},
         "region": db_node.region or "unknown",
         "stake_tier": db_node.stake_tier.value if hasattr(db_node.stake_tier, 'value') else str(db_node.stake_tier or "personal"),
         "quality_score": 0.9,
@@ -889,7 +920,7 @@ async def node_capacity_report(
     }
     
     # 更新到 NodeStatusStore，NodeStatusStore 会生成 cluster_id
-    new_cluster_id = update_node_status(node_id, report_data, capacity_info)
+    new_cluster_id = update_node_status(node_id, merged_status, capacity_info)
     
     # 如果生成了新的 cluster_id，更新 DB
     if new_cluster_id and db_node.cluster_id != new_cluster_id:
