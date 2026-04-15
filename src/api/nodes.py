@@ -915,33 +915,22 @@ async def node_capacity_report(
     if update_fields:
         node_repo.update(node_id, **update_fields)
     
-    # 更新到 NodeStatusStore（包含 capacity info）
-    update_node_status(node_id, report_data)
+    # 准备 capacity_info 用于 NodeStatusStore 生成 cluster_id
+    capacity_info = {
+        "runtime": report_data.get("runtime"),
+        "region": db_node.region or "unknown",
+        "stake_tier": db_node.stake_tier.value if hasattr(db_node.stake_tier, 'value') else str(db_node.stake_tier or "personal"),
+        "quality_score": 0.9,
+        "success_rate": 0.95,
+    }
     
-    # 检查 Cluster ID 变化（通过 Match Engine）
-    new_cluster_id = None
-    try:
-        # 获取新的 cluster_id
-        from ..services.cluster_builder import build_cluster_id
-        
-        models = report_data.get("runtime", {}).get("loaded_models", [])
-        if models:
-            # 使用第一個模型作为代表
-            primary_model = models[0]
-            
-            new_cluster_id = build_cluster_id(
-                region=db_node.region,
-                stake_tier="personal",  # TODO: 从 Node 的 stake_tier 获取
-                models=models,
-                quality_score=0.9,  # TODO: 从历史数据获取
-                success_rate=0.95,  # TODO: 从历史数据获取
-            )
-            
-            if db_node.cluster_id != new_cluster_id:
-                node_repo.update(node_id, cluster_id=new_cluster_id)
-                logger.info(f"Node {node_id} cluster updated: {db_node.cluster_id} -> {new_cluster_id}")
-    except Exception as e:
-        logger.error(f"Failed to update cluster_id: {e}")
+    # 更新到 NodeStatusStore，NodeStatusStore 会生成 cluster_id
+    new_cluster_id = update_node_status(node_id, report_data, capacity_info)
+    
+    # 如果生成了新的 cluster_id，更新 DB
+    if new_cluster_id and db_node.cluster_id != new_cluster_id:
+        node_repo.update(node_id, cluster_id=new_cluster_id)
+        logger.info(f"Node {node_id} cluster assigned: {new_cluster_id}")
     
     return {
         "received": True,

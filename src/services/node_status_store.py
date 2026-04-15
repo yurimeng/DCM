@@ -505,9 +505,58 @@ def _create_from_config() -> NodeStatusStore:
 node_status_store = get_node_status_store()
 
 # 便捷函数
-def update_node_status(node_id: str, status: Dict) -> None:
-    """更新 Node 实时状态"""
+def update_node_status(node_id: str, status: Dict, capacity_info: Optional[Dict] = None) -> Optional[str]:
+    """
+    更新 Node 实时状态
+    
+    如果提供了 capacity_info，会自动生成并返回 cluster_id
+    
+    Args:
+        node_id: Node ID
+        status: Node Live Status Report 数据
+        capacity_info: 容量信息（用于生成 cluster_id）
+            - runtime: {"type": "ollama", "loaded_models": ["qwen2.5:7b"]}
+            - region: str
+            - stake_tier: str
+    
+    Returns:
+        生成的 cluster_id 或 None
+    """
+    cluster_id = None
+    
+    # 如果提供了 capacity_info，生成 cluster_id
+    if capacity_info:
+        try:
+            from .cluster_builder import build_cluster_id
+            
+            # 获取 models
+            models = []
+            if capacity_info.get("runtime"):
+                models = capacity_info["runtime"].get("loaded_models", [])
+            elif capacity_info.get("models"):
+                models = capacity_info.get("models", [])
+            
+            if models:
+                cluster_id = build_cluster_id(
+                    region=capacity_info.get("region", "unknown"),
+                    stake_tier=capacity_info.get("stake_tier", "personal"),
+                    models=models,
+                    quality_score=capacity_info.get("quality_score", 0.9),
+                    success_rate=capacity_info.get("success_rate", 0.95),
+                )
+                # 将 cluster_id 加入 status
+                status = {**status, "cluster_id": cluster_id}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to build cluster_id: {e}")
+    
     node_status_store.update(node_id, status)
+    return cluster_id
+
+
+def get_node_status(node_id: str) -> Dict:
+    """获取 Node 状态"""
+    return node_status_store.get_node_status(node_id)
 
 
 def get_node_status(node_id: str) -> Dict:
