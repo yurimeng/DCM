@@ -354,10 +354,7 @@ async def poll_job(
     if not db_node:
         raise HTTPException(status_code=404, detail="Node not found")
     
-    # 更新心跳
-    node_repo.update_heartbeat(node_id)
-    
-    # 检查节点是否在线（使用新的 list_nodes API）
+    # 检查节点是否在线（使用 NodeStatusStore）
     from ..services.node_status_store import get_node_info
     node_info = get_node_info(node_id)
     
