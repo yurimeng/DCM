@@ -696,7 +696,6 @@ async def list_nodes(
 async def node_live_status(
     node_id: str,
     status_data: dict,
-    db: Session = Depends(get_db)
 ):
     """
     节点实时状态上报 (Node Live Status Report)
@@ -704,18 +703,11 @@ async def node_live_status(
     频率: 2-5 秒
     用途: 实时调度决策
     
-    注意: cluster_id 由 capacity_report 生成，不在这里处理
+    无状态：直接更新到 NodeStatusStore，不检查 DB
     """
     from ..services.node_status_store import update_node_status
     
-    # 验证 Node 存在
-    node_repo = NodeRepository(db)
-    db_node = node_repo.get(node_id)
-    
-    if not db_node:
-        raise HTTPException(status_code=404, detail="Node not found")
-    
-    # 更新到 NodeStatusStore（不生成 cluster_id）
+    # 直接更新到 NodeStatusStore（不生成 cluster_id）
     update_node_status(node_id, status_data)
     
     logger.debug(f"Node {node_id} live status updated")
@@ -846,19 +838,14 @@ async def node_capacity_report(
     
     capacity_info = {
         "runtime": {"type": report_data.get("runtime", {}).get("type", "ollama"), "loaded_models": models},
-        "region": db_node.region or "unknown",
-        "stake_tier": db_node.stake_tier.value if hasattr(db_node.stake_tier, 'value') else str(db_node.stake_tier or "personal"),
+        "region": report_data.get("region") or prev_status.get("status", {}).get("region", "unknown") if prev_status else "unknown",
+        "stake_tier": report_data.get("stake_tier", "personal"),
         "quality_score": 0.9,
         "success_rate": 0.95,
     }
     
     # 更新到 NodeStatusStore，NodeStatusStore 会生成 cluster_id
     new_cluster_id = update_node_status(node_id, merged_status, capacity_info)
-    
-    # 如果生成了新的 cluster_id，更新 DB
-    if new_cluster_id and db_node.cluster_id != new_cluster_id:
-        node_repo.update(node_id, cluster_id=new_cluster_id)
-        logger.info(f"Node {node_id} cluster assigned: {new_cluster_id}")
     
     return {
         "received": True,
