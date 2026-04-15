@@ -173,7 +173,7 @@ settlement:
   # Escrow configuration
   escrow:
     buffer_multiplier: 1.1
-    min_bid_price: 0.0001
+    min_bid_price: 0.000001  # USDC per token (1 USDC/1M tokens)
     # Auto-complete delay in seconds after job completion
     # Job 完成后自动完成的延迟秒数
     auto_complete_seconds: 60

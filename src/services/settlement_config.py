@@ -1,7 +1,11 @@
 """
 Settlement Configuration Service
 结算配置服务 - 统一管理结算相关配置
-(Unified settlement configuration management)
+
+价格说明:
+- 所有价格统一使用 USDC per token
+- 0.000001 USDC/token = 1 USDC/1M tokens
+- 例如: bid_price=0.000001 表示每 token 收费 0.000001 USDC
 """
 
 import os
@@ -61,7 +65,7 @@ class SettlementConfig:
                 "node_earn_rate": 0.95,
                 "escrow": {
                     "buffer_multiplier": 1.1,
-                    "min_bid_price": 0.0001,
+                    "min_bid_price": 0.000001,  # USDC per token
                 },
                 "latency_threshold_good": 5000,
                 "latency_threshold_mild": 10000,
@@ -135,10 +139,14 @@ class SettlementConfig:
     @property
     def min_bid_price(self) -> float:
         """
-        Minimum bid price (USDC/1M tokens)
+        Minimum bid price (USDC per token)
         最小报价
+
+        说明:
+        - 默认值 0.000001 = 1 USDC/1M tokens
+        - 允许用户设置的最低出价
         """
-        return self.settlement_config.get("escrow", {}).get("min_bid_price", 0.0001)
+        return self.settlement_config.get("escrow", {}).get("min_bid_price", 0.000001)
     
     # ===== Verification Thresholds =====
     # 验证阈值
