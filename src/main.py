@@ -24,6 +24,11 @@ async def lifespan(app: FastAPI):
     init_db()
     print("Database initialized.")
     
+    # 初始化 NodeStatusStore
+    from src.services.node_status_store import get_node_status_store
+    store = get_node_status_store()
+    print(f"NodeStatusStore initialized: {type(store._backend).__name__}")
+    
     # 从数据库加载状态到内存
     _load_matching_state()
     
