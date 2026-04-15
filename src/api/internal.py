@@ -1019,3 +1019,16 @@ async def db_migrate(db: Session = Depends(get_db)):
             logger.error(f"Migration failed: {e}")
     
     return {"migrations": results}
+
+@router.get("/db/check/{table}")
+async def db_check_table(table: str, db: Session = Depends(get_db)):
+    """检查表结构"""
+    from sqlalchemy import text
+    result = db.execute(text(f"PRAGMA table_info({table})"))
+    columns = [{"cid": row[0], "name": row[1], "type": row[2]} for row in result]
+    
+    # 也检查索引
+    indexes = db.execute(text(f"PRAGMA index_list({table})"))
+    index_list = [{"name": row[1]} for row in indexes]
+    
+    return {"table": table, "columns": columns, "indexes": index_list}
