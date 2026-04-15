@@ -81,16 +81,23 @@ class MatchingService:
         优先从本地 _pending_jobs 查找（向后兼容）
         如果找不到，尝试从 Job Queue 获取
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         # 先从本地队列查找
         job = self._pending_jobs.get(job_id)
         if job:
+            logger.info(f"[MATCH DEBUG] trigger_match: found job {job_id}, calling _match()")
             match = self._match(job)
+            logger.info(f"[MATCH DEBUG] trigger_match: _match returned {match}")
             if match:
                 # 从本地队列移除
                 self.remove_job(job_id)
                 # 从 Job Queue 中移除（标记为已处理）
                 self.queue.acknowledge(job_id)
                 return match
+        else:
+            logger.info(f"[MATCH DEBUG] trigger_match: job {job_id} not found in _pending_jobs")
         return None
     
     def consume_queue(self, timeout: float = 1.0) -> Optional[Match]:
@@ -277,18 +284,33 @@ class MatchingService:
                 
                 node_status = node_status_store.get_node_status(db_node.node_id)
                 
-                runtime_data = json.loads(db_node.runtime) if isinstance(db_node.runtime, str) else {}
-                model_support = json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else []
+                # Parse runtime_data safely (handle both JSON and plain strings)
+                runtime_str = db_node.runtime if isinstance(db_node.runtime, str) else str(db_node.runtime)
+                try:
+                    runtime_data = json.loads(runtime_str) if runtime_str.startswith('{') else {'type': runtime_str, 'loaded_models': []}
+                except json.JSONDecodeError:
+                    runtime_data = {'type': runtime_str or 'ollama', 'loaded_models': []}
+                
+                # Parse model_support safely (PRIORITY: use db_node.model_support, fallback to runtime_data)
+                try:
+                    model_support = json.loads(db_node.model_support) if isinstance(db_node.model_support, str) else []
+                except json.JSONDecodeError:
+                    model_support = []
+                
+                # Fallback: if model_support is still empty, try to get from runtime_data
+                if not model_support and runtime_data.get('loaded_models'):
+                    model_support = runtime_data.get('loaded_models', [])
+                
                 logger.info(f"[MATCH DEBUG] Node model_support: {model_support}, job.model: {job.model}")
                 
                 node = Node(
                     node_id=db_node.node_id,
-                    user_id=db_node.user_id,
-                    runtime=runtime_data or {'type': 'ollama', 'loaded_models': []},
-                    hardware={'gpu_type': db_node.gpu_type, 'gpu_count': db_node.gpu_count},
-                    reliability={'avg_latency_ms': db_node.avg_latency, 'success_rate': 0.95, 'quality_score': 0.9},
-                    pricing={'ask_price_usdc_per_mtoken': db_node.ask_price},
-                    location={'region': db_node.region},
+                    user_id=db_node.user_id or '',
+                    runtime={'type': runtime_data.get('type', 'ollama'), 'loaded_models': model_support},
+                    hardware={'gpu_type': db_node.gpu_type or 'unknown', 'gpu_count': db_node.gpu_count or 1},
+                    reliability={'avg_latency_ms': db_node.avg_latency or 100, 'success_rate': 0.95, 'quality_score': 0.9},
+                    pricing={'ask_price_usdc_per_mtoken': db_node.ask_price or 0.001},
+                    location={'region': db_node.region or 'unknown'},
                 )
                 node.state.available_concurrency = node_status.get('available_concurrency', 1)
                 node.state.available_queue_tokens = node_status.get('available_queue_tokens', 1500)
@@ -318,11 +340,18 @@ class MatchingService:
         - job.model: 精确匹配 model_support（支持前缀匹配如 qwen → qwen2.5:7b）
         - job.model 为空: 匹配任何可用节点（由系统分配排名第一的）
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.info(f"[_can_match DEBUG] job: model={job.model}, bid={job.bid_price}, max_lat={job.max_latency}")
+        logger.info(f"[_can_match DEBUG] node: model_support={node.model_support}, ask={node.ask_price}, avg_lat={node.avg_latency}")
+        logger.info(f"[_can_match DEBUG] node_status: {node_status}")
+        
         # 模型匹配
         if job.model:
             # 检查是否为完整模型名
             if job.model in node.model_support:
-                pass  # 精确匹配
+                logger.info(f"[_can_match DEBUG] Model exact match: {job.model} in {node.model_support}")
             else:
                 # 尝试前缀匹配（如 qwen 匹配 qwen2.5:7b）
                 family_found = False
@@ -331,15 +360,18 @@ class MatchingService:
                         family_found = True
                         break
                 if not family_found:
+                    logger.info(f"[_can_match DEBUG] Model NO match")
                     return False
         # job.model 为空: 不检查模型（匹配任何可用节点）
         
         # 价格匹配
         if job.bid_price < node.ask_price:
+            logger.info(f"[_can_match DEBUG] Price fail: {job.bid_price} < {node.ask_price}")
             return False
         
         # 3. 延迟匹配
         if node.avg_latency > job.max_latency:
+            logger.info(f"[_can_match DEBUG] Latency fail: {node.avg_latency} > {job.max_latency}")
             return False
         
         # 4. 容量检查（从 node_status 获取）
@@ -347,8 +379,10 @@ class MatchingService:
             available_tokens = node_status.get('available_queue_tokens', 0)
             job_tokens = job.input_tokens + job.output_tokens_limit
             if available_tokens < job_tokens:
+                logger.info(f"[_can_match DEBUG] Capacity fail: {available_tokens} < {job_tokens}")
                 return False
         
+        logger.info(f"[_can_match DEBUG] All checks passed!")
         return True
     
     def _get_job_tokens(self, job: Job) -> int:
