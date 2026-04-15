@@ -3,7 +3,7 @@ Nodes API - F2: 节点注册与状态管理
 来源: Function/F2
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Body
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from datetime import datetime
@@ -136,7 +136,7 @@ async def register_node(
 @router.post("/{node_id}/login")
 async def node_login(
     node_id: str,
-    login_data: dict,  # {user_id: xxx}
+    login_data: dict = Body(..., description="{user_id: xxx}")
     db: Session = Depends(get_db)
 ):
     """
