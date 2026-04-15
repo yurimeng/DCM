@@ -191,7 +191,7 @@ async def register_user(
         email=email,
         auth_provider=AuthProvider.EMAIL,
     )
-    password_hash=User.hash_password(password)
+    user.password_hash=User.hash_password(password)
     
     db_user = user_repo.create(user)
     
