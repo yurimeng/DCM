@@ -545,6 +545,11 @@ def update_node_status(node_id: str, status: Dict, capacity_info: Optional[Dict]
     """
     cluster_id = None
     
+    # 防御性: 确保 timestamp 存在（用于 is_online 判断）
+    import time
+    if not status.get("timestamp"):
+        status = {**status, "timestamp": int(time.time() * 1000)}
+    
     # 如果提供了 capacity_info，生成 cluster_id
     if capacity_info:
         try:

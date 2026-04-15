@@ -153,7 +153,7 @@ class MatchingService:
         # 第二步: 从 NodeStatusStore 检查节点是否在线
         # ═══════════════════════════════════════════════════════════════
         
-        from .node_status_store import get_node_info
+        from .node_status_store import get_node_info, node_status_store
         node_info = get_node_info(node_id)
         
         if not node_info:

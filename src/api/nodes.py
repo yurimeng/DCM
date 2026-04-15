@@ -707,6 +707,11 @@ async def node_live_status(
     """
     from ..services.node_status_store import update_node_status
     
+    # 确保 timestamp 存在（用于判断 is_online）
+    import time
+    if "timestamp" not in status_data or not status_data["timestamp"]:
+        status_data = {**status_data, "timestamp": int(time.time() * 1000)}
+    
     # 直接更新到 NodeStatusStore（不生成 cluster_id）
     update_node_status(node_id, status_data)
     
@@ -783,8 +788,11 @@ async def node_capacity_report(
     prev_status = node_status_store.get(node_id)
     
     # 合并状态：capacity_report 优先使用自己的数据
+    # timestamp: 如果没有提供，使用当前时间（确保节点被视为 online）
+    import time
+    timestamp = report_data.get("timestamp") or int(time.time() * 1000)
     merged_status = {
-        "timestamp": report_data.get("timestamp"),
+        "timestamp": timestamp,
         "status": {
             "status": "online",
         },

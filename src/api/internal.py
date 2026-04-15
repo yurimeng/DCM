@@ -27,20 +27,36 @@ router = APIRouter(prefix="/internal/v1", tags=["internal"])
 async def health_check():
     """
     健康检查端点
-    
+
     GET /internal/v1/health
-    
+
     用于 Render 健康检查
     """
     from ..services import matching_service
-    
+    from ..services.node_status_store import list_online_nodes
+
+    # 获取在线节点数量
+    online_nodes = list_online_nodes(max_age_seconds=10)
+
+    # 获取待处理 Job 数量
+    pending_jobs = 0
+    if hasattr(matching_service, 'get_pending_jobs_count'):
+        pending_jobs = matching_service.get_pending_jobs_count()
+
+    # 获取队列状态
+    queue_stats = {}
+    if hasattr(matching_service, 'get_queue_stats'):
+        queue_stats = matching_service.get_queue_stats()
+
     return {
         "status": "healthy",
         "version": "0.1.0",
         "mvp_mode": True,
         "services": {
-            "matching": matching_service.get_status(),
-            "online_nodes": len(matching_service._online_nodes),
+            "matching": "running",
+            "online_nodes": len(online_nodes),
+            "pending_jobs": pending_jobs,
+            "queue": queue_stats,
         }
     }
 
